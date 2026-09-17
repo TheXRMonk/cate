@@ -231,6 +231,12 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       // Metadata only. useWindowRuntime applies it to panel state; the activity
       // FSM deliberately has no transition for a title update.
       break
+    case 'subagent-start':
+    case 'subagent-progress':
+    case 'subagent-stop':
+      // Child lifecycle has its own UI projection. It must not alter the root
+      // Hermes terminal's running/waiting state.
+      break
     case 'permission-wait':
       // Mid-turn block on the user's approval: show waiting NOW and say what
       // is blocked. If the event races ahead of the first presence tick the

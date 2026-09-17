@@ -40,6 +40,8 @@ export interface SharedPanelDefinition {
   /** Whether a panel of this type can be placed as a canvas node. Canvas
    *  panels themselves live only in dock zones. */
   canLiveOnCanvas: boolean
+  /** Whether this panel may transfer into another renderer window. */
+  canDetach?: boolean
   /** Whether this panel supports an explicit checkout switch/create action.
    *  File-backed panels can still derive passive checkout affinity by path. */
   worktreeBinding: boolean
@@ -152,6 +154,22 @@ export const PANEL_DEFINITIONS = {
     keepMountedOffscreen: true,
     keepMountedWhenTabHidden: true,
   },
+  'hermes-subagent': {
+    type: 'hermes-subagent',
+    label: 'Hermes subagent',
+    brandColor: '#D5A93E',
+    mutedColor: '#8f793e',
+    tintClass: 'text-amber-400',
+    defaultSize: { width: 600, height: 420 },
+    minimumSize: { width: 320, height: 220 },
+    ghostSvg: ghost('rgb(213,169,62)', '<circle cx="12" cy="12" r="3"/><path d="M12 3v6M12 15v6M3 12h6M15 12h6"/>'),
+    canLiveOnCanvas: true,
+    canDetach: false,
+    worktreeBinding: false,
+    navigable: true,
+    keepMountedOffscreen: false,
+    keepMountedWhenTabHidden: false,
+  },
   review: {
     type: 'review',
     splitMenuOrder: 8,
@@ -226,6 +244,10 @@ export function isWorktreePanelType(type: PanelType | string | undefined): type 
 
 export function isNavigablePanelType(type: PanelType | string | undefined): type is PanelType {
   return !!type && !!PANEL_DEFINITIONS[type as PanelType]?.navigable
+}
+
+export function canDetachPanelType(type: PanelType | string | undefined): boolean {
+  return !!type && getSharedPanelDef(type).canDetach !== false
 }
 
 /** Generic panel types offered by the dock split menu, in display order. */

@@ -2,6 +2,7 @@ import { migrateNavigationPanel } from './panels'
 import { describe, it, expect } from 'vitest'
 import {
   SPLIT_MENU_PANEL_TYPES,
+  canDetachPanelType,
   isNavigablePanelType,
   isWorktreePanelType,
   keepsMountedOffscreen,
@@ -13,6 +14,7 @@ describe('resolvePanelSize', () => {
   it('returns the fixed per-type default', () => {
     expect(resolvePanelSize('terminal')).toEqual({ width: 640, height: 400 })
     expect(resolvePanelSize('editor')).toEqual({ width: 600, height: 500 })
+    expect(resolvePanelSize('hermes-subagent')).toEqual({ width: 600, height: 420 })
   })
 
   it('ignores any leftover settings values', () => {
@@ -64,6 +66,16 @@ describe('panel capabilities', () => {
 
   it('owns the ordered generic split-menu catalog', () => {
     expect(SPLIT_MENU_PANEL_TYPES).toEqual(['editor', 'terminal', 'browser', 'canvas', 'agent', 'review'])
+  })
+
+  it('keeps automatically managed Hermes subagent panels out of the generic create menu', () => {
+    expect(isNavigablePanelType('hermes-subagent')).toBe(true)
+    expect(SPLIT_MENU_PANEL_TYPES).not.toContain('hermes-subagent')
+  })
+
+  it('keeps Hermes subagent panels in their root terminal window', () => {
+    expect(canDetachPanelType('hermes-subagent')).toBe(false)
+    expect(canDetachPanelType('terminal')).toBe(true)
   })
 })
 

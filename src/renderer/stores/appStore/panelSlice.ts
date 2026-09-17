@@ -42,6 +42,7 @@ type PanelSliceActions = Pick<
   | 'createReview'
   | 'createCanvas'
   | 'createAgent'
+  | 'createHermesSubagent'
   | 'closePanel'
   | 'updatePanelTitle'
   | 'updatePanelTitleFromAgent'
@@ -59,6 +60,7 @@ type PanelSliceActions = Pick<
   | 'setPanelAgentSession'
   | 'setPanelCodingAgentLaunch'
   | 'setPanelCodingAgentRun'
+  | 'setPanelHermesSubagent'
   | 'setPanelRelationContextMode'
   | 'addPanel'
   | 'removePanelRecord'
@@ -216,6 +218,43 @@ export function createPanelSlice(set: AppSet, get: AppGet): PanelSliceActions {
         ...(worktreeId ? { worktreeId } : {}),
       }
       return addAndPlacePanel(set, get, workspaceId, panel, withDefaultSize('agent', placement), position)
+    },
+
+    createHermesSubagent(workspaceId, snapshot, placement?) {
+      const existing = Object.values(
+        get().workspaces.find((workspace) => workspace.id === workspaceId)?.panels ?? {},
+      ).find((panel) =>
+        panel.hermesSubagent?.id === snapshot.id &&
+        panel.hermesSubagent.parentTerminalId === snapshot.parentTerminalId &&
+        panel.hermesSubagent.rootSessionId === snapshot.rootSessionId &&
+        panel.hermesSubagent.parentSessionId === snapshot.parentSessionId &&
+        panel.hermesSubagent.sourcePid === snapshot.sourcePid &&
+        panel.hermesSubagent.sourceStartedAt === snapshot.sourceStartedAt &&
+        panel.hermesSubagent.parentPanelId === snapshot.parentPanelId,
+      )
+      if (existing) {
+        const current = existing.hermesSubagent!
+        if (current?.sequence !== undefined && snapshot.sequence !== undefined
+          && snapshot.sequence <= current.sequence) return existing.id
+        if (current.status !== 'running') return existing.id
+        setPanelField(set, workspaceId, existing.id, (panel) => ({ ...panel, hermesSubagent: snapshot }))
+        return existing.id
+      }
+      const panel: PanelState = {
+        id: generateId(),
+        type: 'hermes-subagent',
+        title: nextNumberedTitle(get, workspaceId, 'hermes-subagent', 'Hermes task'),
+        isDirty: false,
+        hermesSubagent: snapshot,
+      }
+      return addAndPlacePanel(
+        set,
+        get,
+        workspaceId,
+        panel,
+        withDefaultSize('hermes-subagent', placement),
+        undefined,
+      )
     },
 
     // --- Panel management ---
@@ -388,6 +427,16 @@ export function createPanelSlice(set: AppSet, get: AppGet): PanelSliceActions {
         ...panel,
         codingAgentRun: run,
       }))
+    },
+
+    setPanelHermesSubagent(workspaceId, panelId, snapshot) {
+      setPanelField(set, workspaceId, panelId, (panel) => {
+        const current = panel.hermesSubagent
+        if (current?.sequence !== undefined && snapshot?.sequence !== undefined
+          && snapshot.sequence <= current.sequence) return panel
+        if (current && current.status !== 'running') return panel
+        return { ...panel, hermesSubagent: snapshot }
+      })
     },
 
     setPanelRelationContextMode(workspaceId, panelId, mode) {

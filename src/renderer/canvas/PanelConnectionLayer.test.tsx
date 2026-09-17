@@ -160,6 +160,46 @@ describe('PanelConnectionLayer', () => {
       .filter((item) => item.textContent?.includes('Recommended'))).toHaveLength(1)
   })
 
+  it('renders automatic Hermes child ownership as a non-editable connection', () => {
+    useAppStore.setState((state) => ({
+      workspaces: state.workspaces.map((workspace) => workspace.id === WS ? {
+        ...workspace,
+        panels: {
+          ...workspace.panels,
+          worker: {
+            id: 'worker',
+            type: 'hermes-subagent',
+            title: 'Hermes task 1',
+            isDirty: false,
+            hermesSubagent: {
+              id: 'sa-0-abcd1234',
+              parentTerminalId: 'pty-parent',
+              rootSessionId: 'root-session',
+              parentPanelId: 'agent',
+              parentSessionId: 'root-session',
+              status: 'running',
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        },
+      } : workspace),
+    }))
+    const store = canvasStore()
+    act(() => {
+      root.render(
+        <CanvasStoreProvider store={store}>
+          <PanelConnectionLayer workspaceId={WS} />
+        </CanvasStoreProvider>,
+      )
+    })
+
+    expect(container.querySelector('[data-panel-connection="persistent"]')).not.toBeNull()
+    expect(container.querySelector('[data-panel-relation-selector]')).toBeNull()
+    expect(container.querySelector('[data-panel-connection-label="delegated-task"]')?.textContent)
+      .toBe('Delegated task')
+  })
+
   it('labels a browser-to-execution relation as sending findings', () => {
     useAppStore.getState().addPanelRelation(WS, 'browser', 'agent', 'context')
     act(() => {

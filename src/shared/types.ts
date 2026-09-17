@@ -9,6 +9,7 @@ import type { AgentId } from './agents'
 import type { AgentHookMode } from './agentHooks'
 import type { CodingAgentLaunch, CodingAgentRun, CodingAgentRunStatus } from './codingAgentRuns'
 import type { PanelRelation } from './panelRelations'
+import type { HermesSubagentSnapshot } from './hermesSubagents'
 
 // -----------------------------------------------------------------------------
 // Geometry primitives
@@ -33,7 +34,7 @@ export interface Rect {
 // Panel types
 // -----------------------------------------------------------------------------
 
-export type PanelType = 'terminal' | 'browser' | 'editor' | 'canvas' | 'agent' | 'review' | 'surface'
+export type PanelType = 'terminal' | 'browser' | 'editor' | 'canvas' | 'agent' | 'review' | 'surface' | 'hermes-subagent'
 
 // -----------------------------------------------------------------------------
 // Canvas node
@@ -269,6 +270,8 @@ export interface PanelState {
   /** One-shot direct-process launch. Cleared immediately after PTY creation so
    *  restoring a workspace never repeats an already-started task. */
   codingAgentLaunch?: CodingAgentLaunch
+  /** Read-only projection of an in-process Hermes delegate_task child. */
+  hermesSubagent?: HermesSubagentSnapshot
   /** Agent panels only: the T3 thread rendered by this panel. Machine-local
    *  because the id belongs to the harness state on this execution host. */
   agentThreadId?: string
@@ -1270,6 +1273,10 @@ export interface ProjectSessionFile {
    *  terminal working directory, and unsaved scratch content kept out of the
    *  committed file. */
   panels: Record<string, ProjectSessionPanel>
+  /** Generated panels omitted from the shareable workspace file. */
+  localPanels?: Record<string, PanelState>
+  /** Canvas geometry for generated machine-local panels. */
+  localCanvases?: Record<string, CanvasSnapshot>
   /** Machine-local because relation topology can encode private working context. */
   panelRelations?: PanelRelation[]
   /** Detached dock windows (machine-local, not committed). */
@@ -1318,6 +1325,8 @@ export interface ProjectSessionPanel {
    *  deliberately excluded; restoring may resume a stamped CLI session but
    *  never repeats the original task. */
   codingAgentRun?: CodingAgentRun
+  /** Machine-local projection of an in-process Hermes child. */
+  hermesSubagent?: HermesSubagentSnapshot
 }
 
 // -----------------------------------------------------------------------------
@@ -1701,6 +1710,7 @@ export const PANEL_CANVAS_DROP_SIZES: Record<PanelType, Size> = {
   canvas: { width: 640, height: 480 },
   agent: { width: 520, height: 440 },
   review: { width: 820, height: 560 },
+  'hermes-subagent': { width: 520, height: 360 },
 }
 
 // -----------------------------------------------------------------------------

@@ -10,6 +10,7 @@ import { terminalRegistry } from './terminal/terminalRegistry'
 import { getOrCreateCanvasStoreForPanel } from '../stores/canvasStore'
 import { captureCanvasPanel } from './workspace/canvasAccess'
 import { applyCanvasChildPanels } from './canvas/applyCanvasChildPanels'
+import { getSharedPanelDef } from '../../shared/panels'
 
 /**
  * Create a PanelTransferSnapshot from a panel's current state.
@@ -32,6 +33,9 @@ export function createTransferSnapshot(
     worktrees?: WorktreeMeta[]
   } = {},
 ): PanelTransferSnapshot {
+  if (getSharedPanelDef(panel.type).canDetach === false) {
+    throw new Error('Hermes subagent panels cannot move between windows')
+  }
   const snapshot: PanelTransferSnapshot = {
     panel: captureEditorPanel(panel),
     geometry,

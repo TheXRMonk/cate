@@ -13,13 +13,13 @@
 // =============================================================================
 
 import { ipcMain } from 'electron'
-import { AGENT_CHANGES_BIND, AGENT_CHANGES_LIST, AGENT_CHANGES_READ, AGENT_HOOKS_INSPECT, AGENT_HOOKS_SET_PROMPT_CONTEXT, SHELL_AGENT_HOOK_EVENT } from '../../shared/ipc-channels'
+import { AGENT_CHANGES_BIND, AGENT_CHANGES_LIST, AGENT_CHANGES_READ, AGENT_HOOKS_INSPECT, AGENT_HOOKS_SET_PROMPT_CONTEXT, SHELL_AGENT_GENERATION_END, SHELL_AGENT_HOOK_EVENT } from '../../shared/ipc-channels'
 import type { AgentHookAgentState, AgentHookEvent } from '../../shared/agentHooks'
 import { runtimes } from '../runtime/runtimeManager'
 import { parseLocator, type RuntimeId } from '../../shared/runtimeLocator'
 import { getRuntimeForTerminal, getTerminalOwner } from './terminal'
 import { sendToWindow, windowFromEvent } from '../windowRegistry'
-import { ingestAgentSessionStamp } from './agentSessionStamps'
+import { ingestAgentSessionStamp, isCurrentAgentSidebandEvent } from './agentSessionStamps'
 
 const unsubs = new Map<RuntimeId, () => void>()
 
@@ -76,7 +76,20 @@ export function registerAgentHookForwarding(): void {
         // that has no owner (already closed, or an id we never spawned) drops.
         const ownerWindowId = getTerminalOwner(event.terminalId)
         if (ownerWindowId == null) return
-        ingestAgentSessionStamp(runtime, event)
+        if (event.kind === 'subagent-start' || event.kind === 'subagent-progress' || event.kind === 'subagent-stop') {
+          if (!isCurrentAgentSidebandEvent(event)) return
+        } else {
+          const replaced = ingestAgentSessionStamp(runtime, event)
+          if (replaced) {
+            sendToWindow(
+              ownerWindowId,
+              SHELL_AGENT_GENERATION_END,
+              event.terminalId,
+              replaced.sourcePid,
+              replaced.sourceStartedAt,
+            )
+          }
+        }
         try {
           sendToWindow(ownerWindowId, SHELL_AGENT_HOOK_EVENT, event.terminalId, event)
         } catch { /* window gone */ }

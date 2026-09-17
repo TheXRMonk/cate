@@ -25,7 +25,11 @@ vi.mock('../windowRegistry', () => ({
   },
 }))
 
-import { ingestAgentSessionStamp, clearAgentSessionStamp } from './agentSessionStamps'
+import {
+  ingestAgentSessionStamp,
+  clearAgentSessionStamp,
+  isCurrentAgentSidebandEvent,
+} from './agentSessionStamps'
 
 let nextCwd: string | null = '/runtime-cwd'
 let getCwdCalls = 0
@@ -110,6 +114,54 @@ describe('kiro resumability gating', () => {
 })
 
 describe('Hermes resumability gating', () => {
+  it('accepts child sideband events only from the current Hermes process generation', () => {
+    ingestAgentSessionStamp(runtime, ev(tid, 'hermes', 'turn-start', 'id-1', '/w', 'work', 202, '200'))
+    const child = (pid: number, startedAt: string): AgentHookEvent => ({
+      ...ev(tid, 'hermes', 'subagent-start', 'id-1', '/w', 'work', pid, startedAt),
+      subagent: {
+        id: 'sa-0-abcd1234',
+        parentSessionId: 'id-1',
+        status: 'running',
+      },
+    })
+
+    expect(isCurrentAgentSidebandEvent(child(202, '200'))).toBe(true)
+    expect(isCurrentAgentSidebandEvent(child(101, '100'))).toBe(false)
+    expect(isCurrentAgentSidebandEvent(child(202, ''))).toBe(false)
+  })
+
+  it('reports the prior Hermes generation when a newer one replaces it', () => {
+    expect(ingestAgentSessionStamp(runtime, ev(tid, 'hermes', 'turn-start', 'old', '/w', 'work', 7, '100')))
+      .toBeUndefined()
+    expect(ingestAgentSessionStamp(runtime, ev(tid, 'hermes', 'session-start', 'new', '/w', 'work', 8, '200')))
+      .toEqual({ sourcePid: 7, sourceStartedAt: '100' })
+  })
+
+  it('reports the prior generation when a reset is the first event from a newer process', () => {
+    ingestAgentSessionStamp(runtime, ev(tid, 'hermes', 'turn-start', 'old', '/w', 'work', 7, '100'))
+    const replacement = ingestAgentSessionStamp(runtime, {
+      ...ev(tid, 'hermes', 'session-start', 'new', '/w', 'work', 8, '200'),
+      raw: { hook_event_name: 'on_session_reset' },
+    })
+    expect(replacement).toEqual({ sourcePid: 7, sourceStartedAt: '100' })
+    const child = (pid: number, startedAt: string): AgentHookEvent => ({
+      ...ev(tid, 'hermes', 'subagent-start', 'new', '/w', 'work', pid, startedAt),
+      subagent: { id: 'sa-0-child', parentSessionId: 'new', status: 'running', sequence: 1 },
+    })
+    expect(isCurrentAgentSidebandEvent(child(7, '100'))).toBe(false)
+    expect(isCurrentAgentSidebandEvent(child(8, '200'))).toBe(true)
+  })
+
+  it('reports the current generation when same-process reset or finalize ends its children', () => {
+    ingestAgentSessionStamp(runtime, ev(tid, 'hermes', 'turn-start', 'old', '/w', 'work', 7, '100'))
+    expect(ingestAgentSessionStamp(runtime, {
+      ...ev(tid, 'hermes', 'session-start', 'new', '/w', 'work', 7, '100'),
+      raw: { hook_event_name: 'on_session_reset' },
+    })).toEqual({ sourcePid: 7, sourceStartedAt: '100' })
+    expect(ingestAgentSessionStamp(runtime, ev(tid, 'hermes', 'session-end', 'new', '/w', 'work', 7, '100')))
+      .toEqual({ sourcePid: 7, sourceStartedAt: '100' })
+  })
+
   it('waits for the first turn and preserves the named profile', () => {
     ingestAgentSessionStamp(runtime, ev(tid, 'hermes', 'session-start', 'id-1', '/w', 'work'))
     expect(stamps(tid)).toEqual([])

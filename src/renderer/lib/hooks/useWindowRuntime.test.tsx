@@ -36,6 +36,7 @@ const h = vi.hoisted(() => ({
   removeWorktree: vi.fn(),
   retargetReviewPanel: vi.fn(),
   consumePanelRelationContextForSend: vi.fn(),
+  markHermesSubagentsUnavailable: vi.fn(),
 }))
 vi.mock('../../docking/useNavigationPanels', () => ({ useNavigationPanels: h.useNavigationPanels }))
 vi.mock('../../hooks/useShortcuts', () => ({ useShortcuts: h.useShortcuts }))
@@ -52,6 +53,10 @@ vi.mock('../review/openReviewPanel', () => ({ retargetReviewPanel: h.retargetRev
 vi.mock('../../hooks/useProcessMonitor', () => ({ useOwnedTerminalTelemetry: h.useOwnedTerminalTelemetry }))
 vi.mock('../agent/panelRelationPrompt', () => ({
   consumePanelRelationContextForSend: h.consumePanelRelationContextForSend,
+}))
+vi.mock('../agent/hermesSubagentProjection', () => ({
+  ingestHermesSubagentEvent: vi.fn(),
+  markHermesSubagentsUnavailable: h.markHermesSubagentsUnavailable,
 }))
 vi.mock('../../stores/settingsStore', () => ({
   useSettingsStore: { getState: () => ({ loadSettings: h.loadSettings }), subscribe: () => () => {} },
@@ -102,6 +107,7 @@ beforeEach(() => {
     onMenuOpenSettings: vi.fn((cb: () => void) => { captured.menuSettings = cb; return () => {} }),
     onAgentScreenStateUpdate: vi.fn((cb: (...a: unknown[]) => void) => { captured.agent = cb; return () => {} }),
     onShellAgentHookEvent: vi.fn((cb: (...a: unknown[]) => void) => { captured.hook = cb; return () => {} }),
+    onShellAgentGenerationEnd: vi.fn((cb: (...a: unknown[]) => void) => { captured.generationEnd = cb; return () => {} }),
     onRevealPanelInWindow: vi.fn((cb: (id: string) => void) => { captured.reveal = cb as never; return () => {} }),
     onClosePanelInWindow: vi.fn((cb: (...a: unknown[]) => void) => { captured.close = cb; return () => {} }),
     onWorktreeRemoved: vi.fn((cb: (...a: unknown[]) => void) => { captured.worktreeRemoved = cb; return () => {} }),
@@ -155,6 +161,12 @@ describe('useWindowRuntime', () => {
     const event = { terminalId: 'pty-1', agentId: 'claude-code', kind: 'turn-resume', sessionId: 's', raw: {} }
     act(() => { captured.hook('pty-1', event) })
     expect(h.consumePanelRelationContextForSend).not.toHaveBeenCalled()
+  })
+
+  it('marks matching children unavailable when their Hermes generation exits', () => {
+    mount()
+    act(() => { captured.generationEnd('pty-1', 42, '100') })
+    expect(h.markHermesSubagentsUnavailable).toHaveBeenCalledWith('pty-1', 42, '100')
   })
 
   it('writes a resolved session title through the normal panel title action', () => {

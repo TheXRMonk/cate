@@ -96,6 +96,7 @@ export const SHELL_ACTIVITY_UPDATE = 'shell:activityUpdate' // main -> renderer
 export const SHELL_PORTS_UPDATE = 'shell:ports-update'       // main -> renderer
 export const SHELL_CWD_UPDATE = 'shell:cwd-update'           // main -> renderer
 export const SHELL_AGENT_SESSION_UPDATE = 'shell:agentSessionUpdate' // main -> renderer
+export const SHELL_AGENT_GENERATION_END = 'shell:agentGenerationEnd' // main -> all renderers
 // Renderer (where the xterm buffer lives) reports the agent's screen-derived
 // state up to main; main re-broadcasts so every window's sidebar agrees.
 export const SHELL_AGENT_SCREEN_STATE = 'shell:agentScreenState'

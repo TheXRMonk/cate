@@ -92,6 +92,39 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('movePanelToNewWindow — dock-located panel', () => {
+  it('refuses an owner-bound Hermes child before starting a transfer', async () => {
+    const ws = 'ws-child'
+    seedWorkspace(ws, [panel('child', 'hermes-subagent')])
+    const dock = createDockStore()
+    dock.getState().dockPanel('child', 'center')
+    registerWorkspaceDockStore(ws, dock)
+
+    expect(await movePanelToNewWindow(ws, 'child')).toBe(false)
+    expect(dragDetach).not.toHaveBeenCalled()
+    expect(panelsOf(ws).child).toBeDefined()
+    releaseWorkspaceDockStore(ws)
+  })
+
+  it('keeps a root terminal with live child projections in the owning window', async () => {
+    const ws = 'ws-parent'
+    const parent = panel('parent', 'terminal')
+    const child: PanelState = {
+      ...panel('child', 'hermes-subagent'),
+      hermesSubagent: {
+        id: 'sa-0-abcd1234', parentPanelId: 'parent', parentTerminalId: 'pty-parent',
+        rootSessionId: 'root-session', parentSessionId: 'root-session', status: 'running', createdAt: 1, updatedAt: 1,
+      },
+    }
+    seedWorkspace(ws, [parent, child])
+    const dock = createDockStore()
+    dock.getState().dockPanel('parent', 'center')
+    registerWorkspaceDockStore(ws, dock)
+
+    expect(await movePanelToNewWindow(ws, 'parent')).toBe(false)
+    expect(dragDetach).not.toHaveBeenCalled()
+    releaseWorkspaceDockStore(ws)
+  })
+
   it('detach accepted → panel undocked and its record dropped', async () => {
     const ws = 'ws-dock-ok'
     seedWorkspace(ws, [panel('t1', 'terminal'), panel('t2', 'terminal')])

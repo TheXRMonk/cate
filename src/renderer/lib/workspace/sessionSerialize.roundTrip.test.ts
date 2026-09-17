@@ -241,6 +241,174 @@ describe('workspace.json + session.json round-trip', () => {
     expect(JSON.stringify(wsFile)).not.toContain('Implement the parser')
   })
 
+  it('keeps Hermes child details machine-local and marks a running child unavailable after restart', () => {
+    const { snapshot } = buildSnapshot()
+    const hermesSubagent = {
+      id: 'sa-0-abcd1234',
+      parentPanelId: 'term-1',
+      parentTerminalId: 'pty-parent',
+      rootSessionId: 'root-session',
+      parentSessionId: 'root-session',
+      sessionId: 'child-session',
+      profile: 'work',
+      role: 'leaf',
+      goal: 'Inspect private implementation details',
+      status: 'running' as const,
+      createdAt: 100,
+      updatedAt: 200,
+    }
+    snapshot.panels!['hermes-child'] = {
+      id: 'hermes-child',
+      type: 'hermes-subagent',
+      title: 'Hermes task 1',
+      isDirty: false,
+      hermesSubagent,
+    }
+    snapshot.canvases!['canvas-1'].canvasNodes.child = {
+      id: 'child', origin: { x: 0, y: 0 }, size: { width: 600, height: 420 },
+      zOrder: 1, creationIndex: 1,
+      dockLayout: { type: 'tabs', id: 'child-tabs', panelIds: ['hermes-child'], activeIndex: 0 },
+    }
+
+    const wsFile = throughDisk(buildWorkspaceFile(snapshot, ROOT, ''))
+    const sessFile = throughDisk(buildSessionFile(snapshot))
+    const restored = projectFilesToSnapshot(wsFile, sessFile, ROOT)
+
+    expect(JSON.stringify(wsFile)).not.toContain(hermesSubagent.goal)
+    expect(wsFile.panels).not.toHaveProperty('hermes-child')
+    expect(JSON.stringify(wsFile)).not.toContain('hermes-subagent')
+    expect(sessFile.localPanels!['hermes-child'].hermesSubagent).toEqual(hermesSubagent)
+    expect(sessFile.localCanvases!['canvas-1'].canvasNodes).toHaveProperty('child')
+    expect(JSON.stringify(sessFile.localCanvases)).not.toContain('term-1')
+    expect(sessFile.panels['hermes-child'].hermesSubagent).toEqual(hermesSubagent)
+    expect(restored.panels!['hermes-child'].hermesSubagent).toEqual({
+      ...hermesSubagent,
+      status: 'unavailable',
+    })
+    expect(restored.canvases!['canvas-1'].canvasNodes).toHaveProperty('child')
+  })
+
+  it('drops machine-local Hermes child geometry when its session sidecar is absent', () => {
+    const { snapshot } = buildSnapshot()
+    snapshot.panels!['hermes-child'] = panel({
+      id: 'hermes-child',
+      type: 'hermes-subagent',
+      hermesSubagent: {
+        id: 'sa-0-abcd1234', parentPanelId: 'term-1', parentTerminalId: 'pty-parent', rootSessionId: 'root-session', parentSessionId: 'root-session',
+        status: 'completed', summary: 'Done', createdAt: 100, updatedAt: 200,
+      },
+    })
+    snapshot.canvases!['canvas-1'].canvasNodes.child = {
+      id: 'child', origin: { x: 0, y: 0 }, size: { width: 600, height: 420 },
+      zOrder: 1, creationIndex: 1,
+      dockLayout: { type: 'tabs', id: 'child-tabs', panelIds: ['hermes-child'], activeIndex: 0 },
+    }
+
+    const wsFile = throughDisk(buildWorkspaceFile(snapshot, ROOT, ''))
+    const restored = projectFilesToSnapshot(wsFile, null, ROOT)
+
+    expect(restored.panels).not.toHaveProperty('hermes-child')
+    expect(restored.canvases!['canvas-1'].canvasNodes).not.toHaveProperty('child')
+  })
+
+  it('drops stale local children and geometry when their parent is missing', () => {
+    const { snapshot } = buildSnapshot()
+    snapshot.panels!.ghost = panel({ id: 'ghost', type: 'editor' })
+    const wsFile = throughDisk(buildWorkspaceFile(snapshot, ROOT, ''))
+    const sessFile = throughDisk(buildSessionFile(snapshot))
+    sessFile.localPanels = {
+      ghost: panel({
+        id: 'ghost', type: 'hermes-subagent', hermesSubagent: {
+          id: 'sa-0-ghost', parentPanelId: 'missing-parent', parentTerminalId: 'pty',
+          rootSessionId: 'root', parentSessionId: 'root', status: 'running', createdAt: 1, updatedAt: 1,
+        },
+      }),
+    }
+    sessFile.localCanvases = {
+      'canvas-1': {
+        id: 'canvas-1', zoomLevel: 1, viewportOffset: { x: 0, y: 0 },
+        canvasNodes: { ghostNode: {
+          id: 'ghostNode', origin: { x: 0, y: 0 }, size: { width: 1, height: 1 }, zOrder: 1, creationIndex: 1,
+          dockLayout: { type: 'tabs', id: 'ghost-tabs', panelIds: ['ghost'], activeIndex: 0 },
+        } },
+      },
+    }
+
+    const restored = projectFilesToSnapshot(wsFile, sessFile, ROOT)
+    expect(restored.panels!['ghost'].type).toBe('editor')
+    expect(restored.panels!['ghost'].hermesSubagent).toBeUndefined()
+    expect(restored.canvases!['canvas-1'].canvasNodes).not.toHaveProperty('ghostNode')
+  })
+
+  it('does not let local child geometry overwrite a shared canvas node', () => {
+    const { snapshot } = buildSnapshot()
+    const sharedNodeId = Object.keys(snapshot.canvases!['canvas-1'].canvasNodes)[0]
+    const originalNode = throughDisk(snapshot.canvases!['canvas-1'].canvasNodes[sharedNodeId])
+    const wsFile = throughDisk(buildWorkspaceFile(snapshot, ROOT, ''))
+    const sessFile = throughDisk(buildSessionFile(snapshot))
+    sessFile.localPanels = {
+      child: panel({
+        id: 'child', type: 'hermes-subagent', hermesSubagent: {
+          id: 'sa-0-child', parentPanelId: 'term-1', parentTerminalId: 'pty',
+          rootSessionId: 'root', parentSessionId: 'root', status: 'completed', createdAt: 1, updatedAt: 2,
+        },
+      }),
+    }
+    sessFile.localCanvases = {
+      'canvas-1': {
+        id: 'canvas-1', zoomLevel: 9, viewportOffset: { x: 999, y: 999 },
+        canvasNodes: { [sharedNodeId]: {
+          ...originalNode,
+          origin: { x: 999, y: 999 },
+          dockLayout: { type: 'tabs', id: 'child-tabs', panelIds: ['child'], activeIndex: 0 },
+        } },
+      },
+    }
+
+    const restored = projectFilesToSnapshot(wsFile, sessFile, ROOT)
+    expect(restored.canvases!['canvas-1'].canvasNodes[sharedNodeId]).toEqual(originalNode)
+  })
+
+  it('does not persist child text when the machine-local sidecar is tracked', () => {
+    const { snapshot } = buildSnapshot()
+    snapshot.panels!['hermes-child'] = panel({
+      id: 'hermes-child', type: 'hermes-subagent',
+      hermesSubagent: {
+        id: 'sa-0-abcd1234', parentPanelId: 'term-1', parentTerminalId: 'pty-parent',
+        rootSessionId: 'root-session', parentSessionId: 'root-session', goal: 'secret goal', summary: 'secret summary',
+        status: 'completed', createdAt: 100, updatedAt: 200,
+      },
+    })
+
+    const session = buildSessionFile(snapshot, undefined, { persistHermesSubagentDetails: false })
+    expect(session.panels['hermes-child'].hermesSubagent).toMatchObject({
+      id: 'sa-0-abcd1234', status: 'completed',
+    })
+    expect(session.localPanels!['hermes-child'].hermesSubagent).toMatchObject({
+      id: 'sa-0-abcd1234', status: 'completed',
+    })
+    expect(JSON.stringify(session)).not.toContain('secret goal')
+    expect(JSON.stringify(session)).not.toContain('secret summary')
+  })
+
+  it('drops user-declared relations involving generated child panels from persistence', () => {
+    const { snapshot } = buildSnapshot()
+    snapshot.panels!['hermes-child'] = panel({
+      id: 'hermes-child', type: 'hermes-subagent',
+      hermesSubagent: {
+        id: 'sa-0-abcd1234', parentPanelId: 'term-1', parentTerminalId: 'pty-parent',
+        rootSessionId: 'root-session', parentSessionId: 'root-session',
+        status: 'completed', createdAt: 100, updatedAt: 200,
+      },
+    })
+    snapshot.panelRelations!.push({
+      id: 'local-relation', fromPanelId: 'term-1', toPanelId: 'hermes-child', kind: 'use',
+    })
+
+    expect(buildSessionFile(snapshot).panelRelations?.map((relation) => relation.id))
+      .toEqual(['relation-1'])
+  })
+
   it('round-trips review state and notes through machine-local session.json only', () => {
     const { snapshot } = buildSnapshot()
     const reviewState = {

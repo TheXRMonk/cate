@@ -18,6 +18,7 @@ interface RenderedConnection {
   flowIndex?: number
   interaction?: PanelInteraction
   relation?: PanelRelation
+  automaticLabel?: string
 }
 
 const EMPTY_PANELS: Record<string, PanelState> = {}
@@ -113,6 +114,7 @@ export function PanelConnectionLayer({ workspaceId }: { workspaceId: string }) {
       persistent: boolean,
       interaction?: PanelInteraction,
       relation?: PanelRelation,
+      automaticLabel?: string,
     ) => {
       const source = panelToNode.get(sourcePanelId)
       const target = panelToNode.get(targetPanelId)
@@ -131,12 +133,20 @@ export function PanelConnectionLayer({ workspaceId }: { workspaceId: string }) {
             ? interaction
             : previous.interaction,
         relation: relation ?? previous?.relation,
+        automaticLabel: automaticLabel ?? previous?.automaticLabel,
       })
     }
 
     for (const panel of Object.values(panels)) {
-      const ownerPanelId = panel.codingAgentRun?.ownerPanelId
-      if (ownerPanelId) add(ownerPanelId, panel.id, true)
+      const ownerPanelId = panel.codingAgentRun?.ownerPanelId ?? panel.hermesSubagent?.parentPanelId
+      if (ownerPanelId) add(
+        ownerPanelId,
+        panel.id,
+        true,
+        undefined,
+        undefined,
+        panel.hermesSubagent ? 'Delegated task' : undefined,
+      )
     }
     for (const interaction of Object.values(interactions)) {
       if (interaction.workspaceId !== workspaceId) continue
@@ -177,6 +187,26 @@ export function PanelConnectionLayer({ workspaceId }: { workspaceId: string }) {
         targetPanel={targetPanel}
         position={position}
       />
+    )
+  })
+
+  const automaticLabels = connections.map((connection) => {
+    if (!connection.automaticLabel || connection.relation) return null
+    const position = panelConnectionMidpoint(
+      { origin: connection.source.origin, size: connection.source.size },
+      { origin: connection.target.origin, size: connection.target.size },
+    )
+    if (!position) return null
+    return (
+      <div
+        key={`${connection.key}-automatic-label`}
+        data-panel-connection-label="delegated-task"
+        data-panel-automatic-relation
+        className="pointer-events-none absolute z-[100001] rounded-full border border-subtle bg-surface-3/95 px-2 py-0.5 text-[10px] text-primary shadow-md backdrop-blur-md"
+        style={{ left: position.x, top: position.y, transform: 'translate(-50%, -50%) scale(0.96)' }}
+      >
+        {connection.automaticLabel}
+      </div>
     )
   })
 
@@ -268,6 +298,7 @@ export function PanelConnectionLayer({ workspaceId }: { workspaceId: string }) {
         })}
       </svg>
       {selectors}
+      {automaticLabels}
     </>
   )
 }

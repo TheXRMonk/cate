@@ -20,6 +20,7 @@ import type {
 import { toRelativePath, toAbsolutePath } from '../../../shared/pathUtils'
 import { collectPanelIds } from '../../../shared/collectPanelIds'
 import { worktreeForPanel } from '../worktreeContext'
+import { restoredHermesSubagent } from '../../../shared/hermesSubagents'
 
 // -----------------------------------------------------------------------------
 // Project-local state builders (.cate/workspace.json + .cate/session.json)
@@ -55,6 +56,9 @@ export function buildWorkspaceFile(
   rootPath: string,
   color?: string,
 ): ProjectWorkspaceFile {
+  const localOnlyPanelIds = new Set(Object.entries(snapshot.panels ?? {})
+    .filter(([, panel]) => panel.type === 'hermes-subagent')
+    .map(([id]) => id))
   // Shareable per-panel metadata, keyed by id. Machine-local facts (worktree
   // tag, working directory, unsaved scratch content) are excluded — they live in
   // session.json. Geometry lives in `canvases`.
@@ -62,6 +66,7 @@ export function buildWorkspaceFile(
   if (snapshot.panels) {
     panels = {}
     for (const [id, p] of Object.entries(snapshot.panels)) {
+      if (localOnlyPanelIds.has(id)) continue
       const worktree = worktreeForPanel(p, snapshot.worktrees ?? [])
       const pathRoot = worktree?.path ?? rootPath
       panels[id] = {
@@ -79,20 +84,41 @@ export function buildWorkspaceFile(
     version: 1,
     name: snapshot.workspaceName,
     color: color ?? '',
-    dockState: snapshot.dockState,
+    dockState: pruneDockState(snapshot.dockState, localOnlyPanelIds),
     panels,
     // Geometry for every canvas (primary + secondary), keyed by canvas panel id.
-    canvases: snapshot.canvases,
+    canvases: snapshot.canvases && Object.fromEntries(Object.entries(snapshot.canvases).map(([id, canvas]) => [id, {
+      ...canvas,
+      canvasNodes: pruneCanvasNodes(canvas.canvasNodes, localOnlyPanelIds),
+    }])),
+  }
+}
+
+function canonicalSubagentPanel(panel: PanelState, persistDetails: boolean): PanelState {
+  if (!panel.hermesSubagent || persistDetails) return panel
+  return {
+    ...panel,
+    hermesSubagent: {
+      ...panel.hermesSubagent,
+      goal: undefined,
+      summary: undefined,
+      latestActivity: undefined,
+    },
   }
 }
 
 export function buildSessionFile(
   snapshot: SessionSnapshot,
   dockWindows?: DetachedDockWindowSnapshot[],
+  options: { persistHermesSubagentDetails?: boolean } = {},
 ): ProjectSessionFile {
-  // Machine-local per-panel facts for every placed panel, keyed by id: the
-  // panel worktree tag, live working directory, and unsaved scratch
-  // content — all kept out of the committed workspace.json.
+  const sanitizedDockWindows = dockWindows?.map((window) => ({
+    ...window,
+    panels: Object.fromEntries(Object.entries(window.panels).map(([id, panel]) => [
+      id,
+      canonicalSubagentPanel(panel, options.persistHermesSubagentDetails !== false),
+    ])),
+  }))
   const panels: Record<string, ProjectSessionPanel> = {}
   for (const p of Object.values(snapshot.panels ?? {})) {
     const workingDirectory = snapshot.terminalCwds?.[p.id]
@@ -104,6 +130,7 @@ export function buildSessionFile(
       !p.searchState &&
       !p.agentSession &&
       !p.codingAgentRun &&
+      !p.hermesSubagent &&
       !p.reviewState &&
       !p.agentThreadId
     ) continue
@@ -116,6 +143,7 @@ export function buildSessionFile(
       worktreeId,
       agentSession: p.agentSession,
       codingAgentRun: p.codingAgentRun,
+      hermesSubagent: canonicalSubagentPanel(p, options.persistHermesSubagentDetails !== false).hermesSubagent,
       reviewState: p.reviewState,
       agentThreadId: p.agentThreadId,
     }
@@ -125,8 +153,22 @@ export function buildSessionFile(
     version: 1,
     workspaceId: snapshot.workspaceId,
     panels,
-    panelRelations: snapshot.panelRelations?.length ? snapshot.panelRelations : undefined,
-    dockWindows: dockWindows?.length ? dockWindows : undefined,
+    panelRelations: snapshot.panelRelations?.filter((relation) =>
+      snapshot.panels?.[relation.fromPanelId]?.type !== 'hermes-subagent' &&
+      snapshot.panels?.[relation.toPanelId]?.type !== 'hermes-subagent'),
+    localPanels: Object.fromEntries(Object.entries(snapshot.panels ?? {})
+      .filter(([, panel]) => panel.type === 'hermes-subagent')
+      .map(([id, panel]) => [id, canonicalSubagentPanel(panel, options.persistHermesSubagentDetails !== false)])),
+    localCanvases: snapshot.canvases && Object.fromEntries(
+      Object.entries(snapshot.canvases)
+        .map(([id, canvas]) => [id, {
+          ...canvas,
+          canvasNodes: Object.fromEntries(Object.entries(canvas.canvasNodes).filter(([, node]) =>
+            collectPanelIds(node.dockLayout).some((panelId) => snapshot.panels?.[panelId]?.type === 'hermes-subagent'))),
+        }] as const)
+        .filter(([, canvas]) => Object.keys(canvas.canvasNodes).length > 0),
+    ),
+    dockWindows: sanitizedDockWindows?.length ? sanitizedDockWindows : undefined,
     // Worktree registry is machine-local (gitignored checkouts) — kept here, not
     // in the committed workspace.json. Paths are absolute, like workingDirectory.
     worktrees: snapshot.worktrees?.length ? snapshot.worktrees : undefined,
@@ -157,7 +199,7 @@ export function projectFilesToSnapshot(
       const ref = migrateNavigationPanel(storedRef)
       if (removed.has(id)) continue
       const sp = sess?.panels?.[id]
-      // Pre-T3 layouts used the old embedded-agent discriminator. Preserve the
+      // Pre-T3 layouts used the old embedded-agent discriminator.
       // panel placement while dropping all legacy embedded-chat state.
       const type = (ref.type === 'cateAgent' ? 'agent' : ref.type) as PanelType
       const pathRoot = sess?.worktrees?.find((worktree) => worktree.id === sp?.worktreeId)?.path ?? rootPath
@@ -179,6 +221,7 @@ export function projectFilesToSnapshot(
         // observed agent evidence replaces or clears it.
         agentSession: sp?.agentSession,
         codingAgentRun: sp?.codingAgentRun,
+        hermesSubagent: restoredHermesSubagent(sp?.hermesSubagent),
         reviewState: sp?.reviewState,
         // Restore the per-panel cwd (worktree path / dropped folder) so the
         // terminal respawns there. TerminalPanel reads panel.cwd directly. The
@@ -188,6 +231,29 @@ export function projectFilesToSnapshot(
       if (sp?.workingDirectory) terminalCwds[id] = sp.workingDirectory
     }
   }
+  const pendingLocalPanels = Object.entries(sess?.localPanels ?? {})
+  const acceptedLocalPanelIds = new Set<string>()
+  let acceptedAny = true
+  while (acceptedAny) {
+    acceptedAny = false
+    for (const [id, localPanel] of pendingLocalPanels) {
+      if (acceptedLocalPanelIds.has(id) || panels?.[id] || ws.panels?.[id]) continue
+      const child = localPanel.hermesSubagent
+      if (
+        localPanel.type !== 'hermes-subagent' || !child ||
+        !panels?.[child.parentPanelId]
+      ) continue
+      ;(panels ??= {})[id] = {
+        ...localPanel,
+        hermesSubagent: restoredHermesSubagent(child),
+      }
+      acceptedLocalPanelIds.add(id)
+      acceptedAny = true
+    }
+  }
+  const rejectedLocalPanelIds = new Set(
+    pendingLocalPanels.map(([id]) => id).filter((id) => !acceptedLocalPanelIds.has(id)),
+  )
 
   return {
     workspaceId: sess?.workspaceId,
@@ -197,11 +263,26 @@ export function projectFilesToSnapshot(
     panels,
     panelRelations: sess?.panelRelations?.filter((relation) =>
       Boolean(panels?.[relation.fromPanelId] && panels?.[relation.toPanelId])),
-    // Canvas geometry carries no file paths (only node geometry referencing panel
-    // ids), so it passes through verbatim.
-    canvases: ws.canvases && Object.fromEntries(Object.entries(ws.canvases).map(([id, canvas]) => [id, {
-      ...canvas, canvasNodes: pruneCanvasNodes(canvas.canvasNodes, removed),
-    }])),
+    // Canvas geometry combines shareable nodes with machine-local generated nodes.
+    canvases: (() => {
+      const ids = new Set([...Object.keys(ws.canvases ?? {}), ...Object.keys(sess?.localCanvases ?? {})])
+      if (!ids.size) return undefined
+      return Object.fromEntries([...ids].map((id) => {
+        const shared = ws.canvases?.[id]
+        const local = sess?.localCanvases?.[id]
+        const base = shared ?? local!
+        return [id, {
+          ...base,
+          canvasNodes: {
+            ...pruneCanvasNodes(local?.canvasNodes ?? {}, new Set([
+              ...rejectedLocalPanelIds,
+              ...Object.keys(shared?.canvasNodes ?? {}),
+            ])),
+            ...pruneCanvasNodes(shared?.canvasNodes ?? {}, removed),
+          },
+        }]
+      }))
+    })(),
     terminalCwds: Object.keys(terminalCwds).length ? terminalCwds : undefined,
     // Restore the persisted worktree registry (absolute paths) so colors/labels
     // are stable and panel.worktreeId references resolve after restart.

@@ -19,6 +19,7 @@ import type {
   ProjectSessionFile,
   RemoteProjectEntry,
 } from '../../../shared/types'
+import { restoredHermesSubagent } from '../../../shared/hermesSubagents'
 
 export async function loadSession(): Promise<MultiWorkspaceSession | null> {
   return loadFromProjectFiles()
@@ -26,8 +27,14 @@ export async function loadSession(): Promise<MultiWorkspaceSession | null> {
 
 export function dockWindowsFromSession(sess: ProjectSessionFile | null): DetachedDockWindowSnapshot[] {
   return (sess?.dockWindows ?? []).flatMap((window) => {
-    const removed = removedPanelIds(window.panels)
-    const panels = Object.fromEntries(Object.entries(window.panels).filter(([id]) => !removed.has(id)).map(([id, panel]) => [id, migrateNavigationPanel(panel)]))
+    const unavailableChildren = new Set(Object.entries(window.panels)
+      .filter(([, panel]) => panel.type === 'hermes-subagent')
+      .map(([id]) => id))
+    const removed = new Set([...removedPanelIds(window.panels), ...unavailableChildren])
+    const panels = Object.fromEntries(Object.entries(window.panels).filter(([id]) => !removed.has(id)).map(([id, panel]) => {
+      const migrated = migrateNavigationPanel(panel)
+      return [id, { ...migrated, hermesSubagent: restoredHermesSubagent(migrated.hermesSubagent) }]
+    }))
     if (removed.size > 0 && !Object.keys(panels).length) return []
     return [{
       ...window,
@@ -38,6 +45,16 @@ export function dockWindowsFromSession(sess: ProjectSessionFile | null): Detache
       }])),
     }]
   })
+}
+
+function restoredSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
+  return {
+    ...snapshot,
+    panels: snapshot.panels && Object.fromEntries(Object.entries(snapshot.panels).map(([id, panel]) => [
+      id,
+      { ...panel, hermesSubagent: restoredHermesSubagent(panel.hermesSubagent) },
+    ])),
+  }
 }
 
 /** Drop a declined project from the recents list. "Don't open" is also "stop
@@ -115,7 +132,7 @@ async function loadFromProjectFiles(): Promise<MultiWorkspaceSession | null> {
       snapshots.push(snapshot)
       dockWindows.push(...dockWindowsFromSession(entry.cache.session))
     } else if (entry.snapshot) {
-      snapshots.push({ ...entry.snapshot, connection: entry.connection })
+      snapshots.push(restoredSnapshot({ ...entry.snapshot, connection: entry.connection }))
     }
   }
   // "Don't open" is also "stop asking": drop the declined entries so the next

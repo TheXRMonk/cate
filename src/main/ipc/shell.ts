@@ -16,6 +16,7 @@ import {
   SHELL_PORTS_UPDATE,
   SHELL_CWD_UPDATE,
   SHELL_AGENT_SCREEN_STATE,
+  SHELL_AGENT_GENERATION_END,
 } from '../../shared/ipc-channels'
 import { getRuntimeForTerminal, getTerminalIds, getTerminalOwner, onTerminalSessionsChanged } from './terminal'
 import { sendToWindow, broadcastToAll, isAnyWindowFocused } from '../windowRegistry'
@@ -187,6 +188,12 @@ async function runActivityScan(): Promise<void> {
           // exactly "what was running at save time".
           if (!agentPresent && prev.previousAgentPresent) {
             clearAgentSessionStamp(
+              terminalId,
+              scanned?.endedAgentPid,
+              scanned?.endedAgentStartedAt,
+            )
+            broadcastToAll(
+              SHELL_AGENT_GENERATION_END,
               terminalId,
               scanned?.endedAgentPid,
               scanned?.endedAgentStartedAt,

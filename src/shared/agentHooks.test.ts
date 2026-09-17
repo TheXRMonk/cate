@@ -645,4 +645,111 @@ describe('hermes spec', () => {
       expect(norm('hermes', { hook_event_name: 'pre_llm_call', ...base, platform })).toBeNull()
     }
   })
+
+  test('normalizes bounded subagent lifecycle without changing the root session lifecycle', () => {
+    expect(norm('hermes', {
+      hook_event_name: 'subagent_start',
+      ...base,
+      parent_session_id: base.session_id,
+      parent_turn_id: 'turn-parent',
+      child_session_id: 'child-session',
+      child_subagent_id: 'sa-0-abcd1234',
+      child_role: 'leaf',
+      child_model: 'gpt-test',
+      child_goal: 'Review the implementation',
+      child_sequence: 1,
+    })).toMatchObject({
+      kind: 'subagent-start',
+      sessionId: base.session_id,
+      subagent: {
+        id: 'sa-0-abcd1234',
+        sessionId: 'child-session',
+        parentSessionId: base.session_id,
+        parentTurnId: 'turn-parent',
+        role: 'leaf',
+        model: 'gpt-test',
+        goal: 'Review the implementation',
+        status: 'running',
+        sequence: 1,
+      },
+    })
+
+    expect(norm('hermes', {
+      hook_event_name: 'subagent_stop',
+      ...base,
+      parent_session_id: base.session_id,
+      child_session_id: 'child-session',
+      child_subagent_id: 'sa-0-abcd1234',
+      child_role: 'leaf',
+      child_status: 'completed',
+      child_summary: 'No blockers found.',
+      duration_ms: 1234,
+      child_sequence: 3,
+    })).toMatchObject({
+      kind: 'subagent-stop',
+      subagent: {
+        id: 'sa-0-abcd1234',
+        status: 'completed',
+        summary: 'No blockers found.',
+        durationMs: 1234,
+      },
+    })
+
+    expect(norm('hermes', {
+      hook_event_name: 'subagent_progress',
+      ...base,
+      root_session_id: base.session_id,
+      parent_session_id: base.session_id,
+      child_session_id: 'child-session',
+      child_subagent_id: 'sa-0-abcd1234',
+      latest_activity: 'Using terminal',
+      child_sequence: 2,
+    })).toMatchObject({
+      kind: 'subagent-progress',
+      sessionId: base.session_id,
+      subagent: {
+        id: 'sa-0-abcd1234',
+        status: 'running',
+        latestActivity: 'Using terminal',
+        sequence: 2,
+      },
+    })
+  })
+
+  test('requires positive child sequence and strips raw child payload fields', () => {
+    expect(norm('hermes', {
+      hook_event_name: 'subagent_start', ...base,
+      parent_session_id: base.session_id,
+      child_session_id: 'child-session',
+      child_subagent_id: 'sa-0-abcd1234',
+    })).toBeNull()
+    const normalized = norm('hermes', {
+      hook_event_name: 'subagent_start', ...base,
+      parent_session_id: base.session_id,
+      child_session_id: 'child-session',
+      child_subagent_id: 'sa-0-abcd1234',
+      child_sequence: 1,
+      tool_args: { password: 'must-not-cross-renderer-boundary' },
+    })
+    expect(normalized?.raw).toEqual({})
+  })
+
+  test('drops malformed subagent lifecycle payloads', () => {
+    expect(norm('hermes', {
+      hook_event_name: 'subagent_start',
+      ...base,
+      parent_session_id: base.session_id,
+      child_session_id: 'child-session',
+      child_subagent_id: 'not a child id',
+      child_goal: 'Review',
+    })).toBeNull()
+
+    expect(norm('hermes', {
+      hook_event_name: 'subagent_start',
+      ...base,
+      root_session_id: 'bad session!',
+      parent_session_id: base.session_id,
+      child_subagent_id: 'sa-0-abcd1234',
+    })).toBeNull()
+  })
 })

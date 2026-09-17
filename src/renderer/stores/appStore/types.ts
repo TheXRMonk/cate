@@ -19,6 +19,7 @@ import type {
   ReviewPanelState,
 } from '../../../shared/types'
 import type { CodingAgentLaunch, CodingAgentRun } from '../../../shared/codingAgentRuns'
+import type { HermesSubagentSnapshot } from '../../../shared/hermesSubagents'
 import type { PanelConnectionSide, PanelRelation, PanelRelationKind } from '../../../shared/panelRelations'
 
 // -----------------------------------------------------------------------------
@@ -104,6 +105,11 @@ export interface AppStoreActions {
     worktreeId?: string,
     threadId?: string,
   ) => string
+  createHermesSubagent: (
+    workspaceId: string,
+    snapshot: HermesSubagentSnapshot,
+    placement?: PanelPlacement,
+  ) => string
 
   // Remove stale dock references without creating panels in an empty workspace.
   reconcileWorkspaceDock: (workspaceId: string) => void
@@ -133,6 +139,7 @@ export interface AppStoreActions {
   setPanelAgentSession: (workspaceId: string, panelId: string, session: TerminalAgentSession | null) => void
   setPanelCodingAgentLaunch: (workspaceId: string, panelId: string, launch: CodingAgentLaunch | undefined) => void
   setPanelCodingAgentRun: (workspaceId: string, panelId: string, run: CodingAgentRun | undefined) => void
+  setPanelHermesSubagent: (workspaceId: string, panelId: string, snapshot: HermesSubagentSnapshot) => void
   setPanelRelationContextMode: (
     workspaceId: string,
     panelId: string,

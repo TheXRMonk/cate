@@ -44,6 +44,7 @@ import type { StoreApi } from 'zustand'
 import type { CanvasStore } from '../../stores/canvasStore'
 import { consumePanelRelationContextForSend } from '../agent/panelRelationPrompt'
 import { startConnectedEditorSync } from '../editor/connectedEditors'
+import { ingestHermesSubagentEvent, markHermesSubagentsUnavailable } from '../agent/hermesSubagentProjection'
 
 export function useWindowRuntime(canvasStore?: StoreApi<CanvasStore>): void {
   useEffect(startConnectedEditorSync, [])
@@ -84,6 +85,19 @@ export function useWindowRuntime(canvasStore?: StoreApi<CanvasStore>): void {
       },
     )
     const offHook = window.electronAPI?.onShellAgentHookEvent?.((terminalId, event) => {
+      if (event.kind === 'subagent-start' || event.kind === 'subagent-progress' || event.kind === 'subagent-stop') {
+        ingestHermesSubagentEvent(event, (ownedTerminalId) => {
+          const workspaceId =
+            workspaceIdForTerminal(ownedTerminalId) ?? useAppStore.getState().selectedWorkspaceId
+          if (!workspaceId) return null
+          const panelId = terminalRegistry.panelIdForPty(ownedTerminalId) ?? ownedTerminalId
+          return useAppStore.getState().workspaces
+            .find((workspace) => workspace.id === workspaceId)?.panels[panelId]
+            ? { workspaceId, panelId }
+            : null
+        })
+        return
+      }
       if (event.kind === 'session-title' && event.title && event.sessionId) {
         const workspaceId =
           workspaceIdForTerminal(terminalId) ?? useAppStore.getState().selectedWorkspaceId
@@ -105,10 +119,14 @@ export function useWindowRuntime(canvasStore?: StoreApi<CanvasStore>): void {
       }
       noteAgentHookEvent(event)
     })
+    const offGenerationEnd = window.electronAPI?.onShellAgentGenerationEnd?.(
+      (terminalId, pid, startedAt) => markHermesSubagentsUnavailable(terminalId, pid, startedAt),
+    )
     return () => {
       stopAgentScreenDetector()
       offRemote?.()
       offHook?.()
+      offGenerationEnd?.()
     }
   }, [])
 

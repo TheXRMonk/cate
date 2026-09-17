@@ -149,6 +149,9 @@ export function createAgentPresenceTracker(deps: AgentPresenceDeps): AgentPresen
 
   return {
     async notePost(terminalId, agentId, pid, kind, sourceStartedAt) {
+      // Subagent observer events belong to the already-registered root Hermes
+      // process. They must never become process-generation/presence edges.
+      if (kind === 'subagent-start' || kind === 'subagent-progress' || kind === 'subagent-stop') return
       // Reject anything that isn't a plain positive pid: posts are made by
       // processes inside the terminal, so the value is untrusted input (and
       // pid 0 / negatives address process GROUPS in kill()).

@@ -12,6 +12,8 @@ import { parseLocator } from '../../shared/runtimeLocator'
 import { relativeDisplayPath } from '../lib/fs/displayPath'
 import { createTransferSnapshot } from '../lib/panelTransfer'
 import { removePanelFromWindow } from '../lib/panels/removePanelFromWindow'
+import { getSharedPanelDef } from '../../shared/panels'
+import { isHermesSubagentWindowBound } from '../../shared/hermesSubagents'
 import { useAppStore } from '../stores/appStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import type { DockStore } from '../stores/dockStore'
@@ -139,6 +141,11 @@ export function useDockTabActions(params: DockTabActionsParams) {
       const panel = getPanelLocal(panelId)
       if (!panel) return
       const wsId = workspaceId ?? useAppStore.getState().selectedWorkspaceId
+      const sourceWs = useAppStore.getState().workspaces.find((workspace) => workspace.id === wsId)
+      if (
+        getSharedPanelDef(panel.type).canDetach === false ||
+        (sourceWs && isHermesSubagentWindowBound(panelId, sourceWs.panels))
+      ) return
       const capture = () => {
         const sourceWs = useAppStore.getState().workspaces.find(w => w.id === wsId)
         const current = sourceWs?.panels[panelId]
@@ -253,7 +260,13 @@ export function useDockTabActions(params: DockTabActionsParams) {
           : []),
         { type: 'separator' },
         { id: 'split-right', label: 'Split Right', enabled: canSplit?.() ?? true },
-        { id: 'move-window', label: 'Move into New Window' },
+        { id: 'move-window', label: 'Move into New Window', enabled: panel
+          ? getSharedPanelDef(panel.type).canDetach !== false && !isHermesSubagentWindowBound(
+              panelId,
+              useAppStore.getState().workspaces.find((workspace) =>
+                workspace.id === (workspaceId ?? useAppStore.getState().selectedWorkspaceId))?.panels ?? {},
+            )
+          : false },
       ]
       const id = await window.electronAPI.showContextMenu(menu)
       switch (id) {

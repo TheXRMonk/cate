@@ -30,6 +30,8 @@ import { codingAgentSnapshot, handleCodingAgentMethod } from './agent/codingAgen
 import { handleBrowserMethod, type BrowserOutcome } from './browser/browserDriver'
 import { portalRegistry } from './portalRegistry'
 import type { AgentHookMode } from '../../shared/agentHookModes'
+import type { HermesSubagentHookEvent } from '../../shared/hermesSubagentEvents'
+import { ingestHermesSubagentEvent } from './agent/hermesSubagentProjection'
 
 /** Serializable snapshot of the search store for e2e assertions. */
 export interface SearchSnapshot {
@@ -103,6 +105,7 @@ declare global {
        *  process-bearing panel never materializes. */
       panelTypes(wsId?: string): string[]
       panels(): PanelState[]
+      emitHermesSubagentEvent(parentPanelId: string, event: HermesSubagentHookEvent): string | null
       createPanel(type: PanelType, filePath?: string): string
       connectPanels(fromPanelId: string, toPanelId: string): string | null
       detachPanel(panelId: string): Promise<boolean>
@@ -614,6 +617,10 @@ export function installE2EHarness(): void {
     selectWorkspace,
     panelTypes,
     panels: () => Object.values(useAppStore.getState().getWorkspace(useAppStore.getState().selectedWorkspaceId)?.panels ?? {}),
+    emitHermesSubagentEvent: (parentPanelId, event) => ingestHermesSubagentEvent(
+      event,
+      () => ({ workspaceId: useAppStore.getState().selectedWorkspaceId, panelId: parentPanelId }),
+    ),
     createPanel: (type, filePath) => getPanelDef(type).create({ filePath, workspaceId: useAppStore.getState().selectedWorkspaceId, placement: { target: 'dock', zone: 'center' } })!,
     connectPanels: (from, to) => useAppStore.getState().addPanelRelation(useAppStore.getState().selectedWorkspaceId, from, to, 'use'),
     detachPanel: (id) => movePanelToNewWindow(useAppStore.getState().selectedWorkspaceId, id),

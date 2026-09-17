@@ -11,6 +11,7 @@ import type { CanvasStore } from '../stores/canvasStore'
 import type { DragSource, DropTarget } from './types'
 import { findZoneForStack, findTabStackAcrossZones } from '../stores/dockTreeUtils'
 import { getDefaultSession } from './session'
+import { getSharedPanelDef } from '../../shared/panels'
 
 export interface CommitContext {
   /** Cross-window resolve callback — ask the main process whether another
@@ -114,6 +115,7 @@ export async function commitDrop(
     }
 
     case 'detach': {
+      if (getSharedPanelDef(panel.type).canDetach === false) return
       // The awaits below are real IPC round-trips, and the drag state has
       // already been reset — keep the source hidden until removal (or refusal)
       // so it doesn't flash at its pre-drag position in between.

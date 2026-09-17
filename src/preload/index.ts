@@ -78,6 +78,7 @@ import {
   SHELL_ACTIVITY_UPDATE,
   SHELL_PORTS_UPDATE,
   SHELL_AGENT_SESSION_UPDATE,
+  SHELL_AGENT_GENERATION_END,
   SHELL_CWD_UPDATE,
   SHELL_AGENT_SCREEN_STATE,
   SHELL_AGENT_HOOK_EVENT,
@@ -698,9 +699,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return createIpcListener(SHELL_AGENT_SESSION_UPDATE, callback)
   },
 
+  onShellAgentGenerationEnd(callback: (terminalId: string, pid?: number, startedAt?: string) => void): () => void {
+    return createIpcListener(SHELL_AGENT_GENERATION_END, callback)
+  },
+
   onShellAgentHookEvent(callback: (terminalId: string, event: unknown) => void): () => void {
     return createIpcListener(SHELL_AGENT_HOOK_EVENT, callback)
   },
+
 
   shellReportAgentScreenState(terminalId: string, state: string): void {
     ipcRenderer.send(SHELL_AGENT_SCREEN_STATE, terminalId, state)

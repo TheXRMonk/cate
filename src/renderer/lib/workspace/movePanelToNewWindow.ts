@@ -21,6 +21,8 @@ import { createTransferSnapshot } from '../panelTransfer'
 import { removePanelFromWindow } from '../panels/removePanelFromWindow'
 import { getWorkspaceDockStore } from './dockRegistry'
 import { resolvePanelLocation } from './canvasAccess'
+import { getSharedPanelDef } from '../../../shared/panels'
+import { isHermesSubagentWindowBound } from '../../../shared/hermesSubagents'
 
 /** Detach `panelId` into a new window. Returns true when the window was
  *  created; false when the panel can't be located or main refused the detach
@@ -32,6 +34,7 @@ export async function movePanelToNewWindow(
   const ws = useAppStore.getState().workspaces.find((w) => w.id === workspaceId)
   const panel = ws?.panels[panelId]
   if (!ws || !panel) return false
+  if (getSharedPanelDef(panel.type).canDetach === false || isHermesSubagentWindowBound(panelId, ws.panels)) return false
   if (!window.electronAPI?.dragDetach) return false
 
   const location = resolvePanelLocation(workspaceId, panelId)

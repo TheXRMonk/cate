@@ -118,10 +118,21 @@ function emit(terminalId: string, session: TerminalAgentSession | null): void {
  * respawned shell (worktree respawn drops the stamp wholesale rather than
  * comparing cwds), so the stamp's cwd is informational.
  */
-export function ingestAgentSessionStamp(runtime: Runtime, event: AgentHookEvent): void {
+export function ingestAgentSessionStamp(
+  runtime: Runtime,
+  event: AgentHookEvent,
+): Pick<AgentHookEvent, 'sourcePid' | 'sourceStartedAt'> | undefined {
   const { terminalId } = event
-  if (event.kind === 'session-title' || event.kind === 'input-submit' || event.kind === 'input-interrupt') return
+  if (
+    event.kind === 'session-title' ||
+    event.kind === 'input-submit' ||
+    event.kind === 'input-interrupt' ||
+    event.kind === 'subagent-start' ||
+    event.kind === 'subagent-progress' ||
+    event.kind === 'subagent-stop'
+  ) return
   const st = stateFor(terminalId)
+  let replacedHermesGeneration: Pick<AgentHookEvent, 'sourcePid' | 'sourceStartedAt'> | undefined
   if (event.agentId === 'hermes') {
     const generationOrder = st.hermesHighWater
       ? compareAgentProcessGeneration(event, st.hermesHighWater)
@@ -133,6 +144,9 @@ export function ingestAgentSessionStamp(runtime: Runtime, event: AgentHookEvent)
       generationOrder === 1 ||
       (generationOrder === null && canReplaceLegacyGeneration)
     ) {
+      if (st.hermesHighWater && generationOrder === 1) {
+        replacedHermesGeneration = { ...st.hermesHighWater }
+      }
       st.hermesHighWater = {
         sourcePid: event.sourcePid,
         sourceStartedAt: event.sourceStartedAt,
@@ -159,9 +173,13 @@ export function ingestAgentSessionStamp(runtime: Runtime, event: AgentHookEvent)
     st.seq++
     st.latest = undefined
     emit(terminalId, null)
-    return
+    return replacedHermesGeneration ?? (
+      event.agentId === 'hermes' && st.hermesHighWater
+        ? { ...st.hermesHighWater }
+        : undefined
+    )
   }
-  if (event.sessionId == null) return
+  if (event.sessionId == null) return replacedHermesGeneration
   st.seq++
   const previousSession = st.session
   st.latest = {
@@ -171,6 +189,8 @@ export function ingestAgentSessionStamp(runtime: Runtime, event: AgentHookEvent)
     ...(event.sourcePid !== undefined ? { sourcePid: event.sourcePid } : {}),
     ...(event.sourceStartedAt !== undefined ? { sourceStartedAt: event.sourceStartedAt } : {}),
   }
+  const resetsHermesChildren = event.agentId === 'hermes' && event.kind === 'session-start'
+    && event.raw.hook_event_name === 'on_session_reset'
   if (event.kind === 'session-start' && !RESUMABLE_FROM_SESSION_START[event.agentId]) {
     // A newly announced, not-yet-resumable Hermes session supersedes the old
     // conversation before its first turn. Clear that old persisted identity
@@ -184,13 +204,21 @@ export function ingestAgentSessionStamp(runtime: Runtime, event: AgentHookEvent)
         previousSession.profile !== event.profile
       )
     ) emit(terminalId, null)
-    return
+    return replacedHermesGeneration ?? (
+      resetsHermesChildren && st.hermesHighWater
+        ? { ...st.hermesHighWater }
+        : undefined
+    )
   }
   const { agentId, sessionId } = event
   const profile = event.profile ? { profile: event.profile } : {}
   if (event.cwd) {
     emit(terminalId, { agentId, sessionId, cwd: event.cwd, ...profile })
-    return
+    return replacedHermesGeneration ?? (
+      resetsHermesChildren && st.hermesHighWater
+        ? { ...st.hermesHighWater }
+        : undefined
+    )
   }
   const seq = st.seq
   void runtime.process
@@ -200,6 +228,22 @@ export function ingestAgentSessionStamp(runtime: Runtime, event: AgentHookEvent)
       emit(terminalId, { agentId, sessionId, cwd: cwd ?? '', ...profile })
     })
     .catch(() => { /* runtime gone — no stamp beats a cwd-less guess */ })
+  return replacedHermesGeneration ?? (
+    resetsHermesChildren && st.hermesHighWater
+      ? { ...st.hermesHighWater }
+      : undefined
+  )
+}
+
+/** Sideband events are accepted only for the current root session/generation. */
+export function isCurrentAgentSidebandEvent(event: AgentHookEvent): boolean {
+  const st = states.get(event.terminalId)
+  const current = st?.latest ?? st?.session
+  if (!current || current.agentId !== event.agentId || current.sessionId !== event.sessionId) return false
+  if (event.profile !== undefined && current.profile !== event.profile) return false
+  if (event.agentId !== 'hermes') return true
+  if (!st?.hermesHighWater) return false
+  return compareAgentProcessGeneration(event, st.hermesHighWater) === 0
 }
 
 /** Falling edge: the agent exited while the terminal lives on — nothing to

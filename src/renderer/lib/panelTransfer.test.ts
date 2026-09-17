@@ -40,6 +40,24 @@ beforeEach(() => {
 })
 
 describe('createTransferSnapshot — editor content survival', () => {
+  it('refuses to detach an owner-bound Hermes child', () => {
+    const panel: PanelState = {
+      id: 'child',
+      type: 'hermes-subagent',
+      title: 'Hermes task 1',
+      isDirty: false,
+      hermesSubagent: {
+        id: 'sa-0-abcd1234', parentPanelId: 'parent', parentTerminalId: 'pty-parent', rootSessionId: 'root', parentSessionId: 'root',
+        status: 'running', createdAt: 1, updatedAt: 1,
+      },
+    }
+    expect(() => createTransferSnapshot(
+      panel,
+      { type: 'canvas', canvasId: 'c-1', canvasNodeId: 'n-1' },
+      { origin: { x: 0, y: 0 }, size: { width: 600, height: 400 } },
+    )).toThrow('Hermes subagent panels cannot move between windows')
+  })
+
   it('carries unsaved scratch-editor content in the canonical panel record', () => {
     const panel: PanelState = {
       id: 'panel-editor-1',

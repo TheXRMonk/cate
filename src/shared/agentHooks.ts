@@ -18,6 +18,13 @@
 
 import { createHash } from 'crypto'
 import type { AgentId } from './agents'
+import {
+  isHermesSubagentEvent,
+  type HermesSubagentEvent,
+  type HermesSubagentHookEvent,
+} from './hermesSubagentEvents'
+export { isHermesSubagentEvent }
+export type { HermesSubagentEvent, HermesSubagentHookEvent }
 export {
   resolveAgentHookMode,
   type AgentHookConfig,
@@ -56,6 +63,10 @@ export type AgentHookEventKind =
    *  the renderer. These events carry no typed text. */
   | 'input-submit'
   | 'input-interrupt'
+  | 'subagent-start'
+  | 'subagent-progress'
+  | 'subagent-stop'
+
 
 export interface AgentHookEvent {
   /** The pty id whose env the hook echoed back (CATE_TERMINAL_ID). */
@@ -84,6 +95,8 @@ export interface AgentHookEvent {
   sourceStartedAt?: string
   /** Present only for session-title events. */
   title?: string
+  /** Present only for Hermes subagent lifecycle events. */
+  subagent?: HermesSubagentEvent
   /** The raw payload as posted by the bridge, for consumers that need
    *  per-CLI detail (e.g. codex's turn_id / tool_input on permission-wait). */
   raw: Record<string, unknown>
@@ -877,6 +890,20 @@ const kiroSpec: AgentHookSpec = {
 // ---------------------------------------------------------------------------
 
 const HERMES_INTERACTIVE_PLATFORMS = new Set(['cli', 'tui'])
+const HERMES_SUBAGENT_ID = /^sa-[A-Za-z0-9_-]{1,124}$/
+const HERMES_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+const HERMES_SUBAGENT_STATUS = new Set(['completed', 'failed', 'interrupted'])
+const HERMES_SUBAGENT_MAX_TEXT = {
+  role: 32,
+  goal: 4_000,
+  summary: 12_000,
+  activity: 96,
+} as const
+
+function boundedHookString(value: unknown, max: number): string | undefined {
+  const text = str(value)
+  return text === null ? undefined : text.slice(0, max)
+}
 
 const hermesSpec: AgentHookSpec = {
   reportsTurnEndOnInterrupt: true,
@@ -884,6 +911,57 @@ const hermesSpec: AgentHookSpec = {
   normalize: (p) => {
     const platform = str(p.platform)
     if (platform && !HERMES_INTERACTIVE_PLATFORMS.has(platform)) return null
+    if (
+      p.hook_event_name === 'subagent_start' ||
+      p.hook_event_name === 'subagent_progress' ||
+      p.hook_event_name === 'subagent_stop'
+    ) {
+      const id = str(p.child_subagent_id)
+      const parentSessionId = str(p.parent_session_id)
+      const rootSessionId = str(p.root_session_id) ?? parentSessionId
+      if (
+        !id || !HERMES_SUBAGENT_ID.test(id) ||
+        !parentSessionId || !HERMES_SESSION_ID.test(parentSessionId) ||
+        !rootSessionId || !HERMES_SESSION_ID.test(rootSessionId)
+      ) return null
+      const childSessionId = str(p.child_session_id)
+      const parentSubagentId = str(p.parent_subagent_id)
+      const profile = str(p.profile)
+      if (childSessionId && !HERMES_SESSION_ID.test(childSessionId)) return null
+      if (parentSubagentId && !HERMES_SUBAGENT_ID.test(parentSubagentId)) return null
+      if (profile && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(profile)) return null
+      const stopped = p.hook_event_name === 'subagent_stop'
+      const progressing = p.hook_event_name === 'subagent_progress'
+      const statusValue = str(p.child_status)
+      const sequence = typeof p.child_sequence === 'number' && Number.isSafeInteger(p.child_sequence)
+        && p.child_sequence > 0 ? p.child_sequence : undefined
+      if (sequence === undefined) return null
+      const status = stopped && statusValue && HERMES_SUBAGENT_STATUS.has(statusValue)
+        ? statusValue as HermesSubagentEvent['status']
+        : stopped ? 'failed' : 'running'
+      return {
+        kind: stopped ? 'subagent-stop' : progressing ? 'subagent-progress' : 'subagent-start',
+        sessionId: rootSessionId,
+        profile: profile ?? undefined,
+        subagent: {
+          id,
+          sessionId: childSessionId ?? undefined,
+          parentSessionId,
+          parentTurnId: boundedHookString(p.parent_turn_id, 128),
+          parentSubagentId: parentSubagentId ?? undefined,
+          role: boundedHookString(p.child_role, HERMES_SUBAGENT_MAX_TEXT.role),
+          model: boundedHookString(p.child_model, 128),
+          goal: boundedHookString(p.child_goal, HERMES_SUBAGENT_MAX_TEXT.goal),
+          status,
+          summary: boundedHookString(p.child_summary, HERMES_SUBAGENT_MAX_TEXT.summary),
+          durationMs: typeof p.duration_ms === 'number' && Number.isFinite(p.duration_ms)
+            ? Math.min(31_536_000_000, Math.max(0, p.duration_ms))
+            : undefined,
+          latestActivity: boundedHookString(p.latest_activity, HERMES_SUBAGENT_MAX_TEXT.activity),
+          sequence,
+        },
+      }
+    }
     const base = {
       sessionId: str(p.session_id),
       cwd: str(p.cwd) ?? undefined,
@@ -925,6 +1003,15 @@ export function normalizeAgentHookPayload(
   if (!spec) return null
   const fields = spec.normalize(payload)
   if (!fields) return null
-  const turnId = str(payload.turn_id) ?? str(payload.turnId) ?? str(payload.promptId) ?? undefined
-  return { terminalId, agentId: agentId as AgentId, raw: payload, turnId, ...fields }
+  const sideband = fields.kind === 'subagent-start' || fields.kind === 'subagent-progress' || fields.kind === 'subagent-stop'
+  const turnId = sideband
+    ? undefined
+    : str(payload.turn_id) ?? str(payload.turnId) ?? str(payload.promptId) ?? undefined
+  return {
+    terminalId,
+    agentId: agentId as AgentId,
+    raw: sideband ? {} : payload,
+    turnId,
+    ...fields,
+  }
 }

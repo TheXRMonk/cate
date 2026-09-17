@@ -344,6 +344,23 @@ describe('commitDrop — dock-split', () => {
 // -----------------------------------------------------------------------------
 
 describe('commitDrop — detach', () => {
+  it('does not transfer an owner-bound Hermes child across windows', async () => {
+    const srcCanvas = createMockCanvasStore()
+    findCanvasStoreForNodeMock.mockReturnValue(srcCanvas.store)
+    const source: DragSource = {
+      panelId: 'panel-1',
+      origin: { kind: 'canvas-node', canvasStoreApi: srcCanvas.store, nodeId: 'node-S' },
+    }
+    const target: DropTarget = { kind: 'detach', screen: { x: 999, y: 100 } }
+    const ctx = defaultCtx()
+
+    await commitDrop(source, target, { ...panel, type: 'hermes-subagent' }, ctx)
+
+    expect(ctx.crossWindowResolve).not.toHaveBeenCalled()
+    expect(ctx.dragDetach).not.toHaveBeenCalled()
+    expect(srcCanvas.state.finalizeRemoveNode).not.toHaveBeenCalled()
+  })
+
   it('claimed cross-window drop removes source and does NOT call dragDetach', async () => {
     const srcCanvas = createMockCanvasStore()
     findCanvasStoreForNodeMock.mockReturnValue(srcCanvas.store)

@@ -29,4 +29,58 @@ describe('dockWindowsFromSession', () => {
   it('returns [] for a null session', () => {
     expect(dockWindowsFromSession(null)).toEqual([])
   })
+
+  it('drops detached Hermes children because they are root-window-bound', () => {
+    const existing: DetachedDockWindowSnapshot = {
+      dockState: {
+        zones: {
+          left: { position: 'left', visible: false, size: 0, layout: null },
+          right: { position: 'right', visible: false, size: 0, layout: null },
+          bottom: { position: 'bottom', visible: false, size: 0, layout: null },
+          center: {
+            position: 'center', visible: true, size: 0,
+            layout: { type: 'tabs', id: 'tabs', panelIds: ['child'], activeIndex: 0 },
+          },
+        },
+      },
+      panels: {
+        child: {
+          id: 'child', type: 'hermes-subagent', title: 'Hermes task 1', isDirty: false,
+          hermesSubagent: {
+            id: 'sa-0-abcd1234', parentPanelId: 'parent', parentTerminalId: 'pty-parent', rootSessionId: 'root-session', parentSessionId: 'root-session',
+            status: 'running', createdAt: 1, updatedAt: 1,
+          },
+        },
+      },
+      bounds,
+      workspaceId: 'ws-existing',
+      canvasStates: {},
+    }
+    const session = { version: 1, panels: {}, dockWindows: [existing] } as ProjectSessionFile
+
+    expect(dockWindowsFromSession(session)).toEqual([])
+  })
+
+  it('drops a detached Hermes child whose machine-local details are missing', () => {
+    const existing: DetachedDockWindowSnapshot = {
+      dockState: {
+        zones: {
+          left: { position: 'left', visible: false, size: 0, layout: null },
+          right: { position: 'right', visible: false, size: 0, layout: null },
+          bottom: { position: 'bottom', visible: false, size: 0, layout: null },
+          center: {
+            position: 'center', visible: true, size: 0,
+            layout: { type: 'tabs', id: 'tabs', panelIds: ['child'], activeIndex: 0 },
+          },
+        },
+      },
+      panels: { child: { id: 'child', type: 'hermes-subagent', title: 'Hermes task', isDirty: false } },
+      bounds,
+      workspaceId: 'ws-existing',
+      canvasStates: {},
+    }
+    const session = { version: 1, panels: {}, dockWindows: [existing] } as ProjectSessionFile
+
+    expect(dockWindowsFromSession(session)).toEqual([])
+  })
 })

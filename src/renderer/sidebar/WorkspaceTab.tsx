@@ -32,6 +32,7 @@ import { WorkspaceSkillsTree } from './WorkspaceSkillsTree'
 import { canvasKey, toggleCollapsed, useTreeCollapseStore } from './treeCollapse'
 import { Tooltip } from '../ui/Tooltip'
 import { worktreeForPanel, worktreeForPath } from '../lib/worktreeContext'
+import { isHermesSubagentWindowBound } from '../../shared/hermesSubagents'
 
 // Stable empty map so the ports selector returns a referentially-constant value
 // when a workspace has no status entry (a fresh `{}` each render would defeat
@@ -409,7 +410,7 @@ export const WorkspaceTab: React.FC<WorkspaceTabProps> = ({
       case 'close-panels': void closeAllPanelsWithConfirm(workspace.id); break
       case 'remove': void removeWorkspacesWithConfirm([workspace.id]); break
     }
-  }, [workspace.id, workspace.name, workspace.rootPath, workspace.color, panels, detachedCount, isSelected, onBulkContextMenu, beginRename])
+  }, [workspace.id, workspace.rootPath, workspace.color, panels, detachedCount, isSelected, onBulkContextMenu, beginRename])
 
   useEffect(() => {
     if (isRenaming && renameInputRef.current) {
@@ -457,7 +458,9 @@ export const WorkspaceTab: React.FC<WorkspaceTabProps> = ({
     // and have no meaning here).
     const id = await window.electronAPI.showContextMenu([
       { id: 'rename', label: 'Rename' },
-      { id: 'move-window', label: 'Move into New Window' },
+      { id: 'move-window', label: 'Move into New Window', enabled:
+        PANEL_REGISTRY[workspace.panels[panelId]?.type]?.canDetach !== false &&
+        !isHermesSubagentWindowBound(panelId, workspace.panels) },
       { type: 'separator' },
       { id: 'close', label: 'Close' },
     ])
@@ -472,7 +475,7 @@ export const WorkspaceTab: React.FC<WorkspaceTabProps> = ({
         handleClosePanel(panelId)
         break
     }
-  }, [beginPanelRename, handleClosePanel, workspace.id])
+  }, [beginPanelRename, handleClosePanel, workspace.id, workspace.panels])
 
   // Context menu for rows hosted in ANOTHER window: cross-window actions only
   // (reveal there / close there, behind the owner's confirm gates). Without

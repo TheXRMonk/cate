@@ -29,6 +29,7 @@ import { prepareTerminalRemount } from './terminalRemount'
 import { useAppStore } from '../stores/appStore'
 import { removePanelFromWindow } from '../lib/panels/removePanelFromWindow'
 import { useSettingsStore } from '../stores/settingsStore'
+import { isHermesSubagentWindowBound } from '../../shared/hermesSubagents'
 
 const DEAD_ZONE_PX = 4
 
@@ -226,6 +227,7 @@ function buildSnapshotFor(spec: DragOpSourceSpec): PanelTransferSnapshot | null 
   const sourceWs = app.workspaces.find((w) => w.panels[spec.panel.id])
     ?? app.workspaces.find((w) => w.id === app.selectedWorkspaceId)
   const panel = sourceWs?.panels[spec.panel.id] ?? spec.panel
+  if (sourceWs && isHermesSubagentWindowBound(panel.id, sourceWs.panels)) return null
   const resolveChildPanel = (childId: string) => sourceWs?.panels[childId]
   // Carry the source workspace root so the detached window inherits a cwd for
   // new terminals (otherwise its stub workspace has none and re-prompts).

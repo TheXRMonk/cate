@@ -400,6 +400,9 @@ export interface ElectronAPI {
   onShellAgentSessionUpdate(
     callback: (terminalId: string, session: TerminalAgentSession | null) => void,
   ): () => void
+  onShellAgentGenerationEnd(
+    callback: (terminalId: string, pid?: number, startedAt?: string) => void,
+  ): () => void
 
   /** Subscribe to normalized agent-CLI hook events (push-based session
    *  identity / turn status / permission-wait, ingested by the terminal's
