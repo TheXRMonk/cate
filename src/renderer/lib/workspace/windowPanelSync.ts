@@ -56,7 +56,7 @@ function statusSignature(): string {
   for (const [wsId, ws] of Object.entries(useStatusStore.getState().workspaces)) {
     for (const [id, terminal] of Object.entries(ws.terminals)) {
       const name = terminal.agentPresent ? terminal.agentName ?? '' : ''
-      parts.push(`${wsId}:${id}:${terminal.agentState}:${name}`)
+      parts.push(`${wsId}:${id}:${terminal.agentState}:${terminal.waitingReason ?? ''}:${name}`)
       if (terminal.listeningPorts.length) parts.push(`${wsId}:p:${id}`)
     }
   }
@@ -147,6 +147,7 @@ export function setupWindowPanelSync(): () => void {
           parentCanvasId: childToCanvas.get(p.id),
           worktreeId: worktreeForPanel(p, ws.worktrees ?? [])?.id ?? p.worktreeId,
           agentState: agentInfo[p.id]?.state,
+          waitingReason: agentInfo[p.id]?.waitingReason,
           agentCanReceivePrompt: p.type === 'terminal'
             ? Boolean(terminalRegistry.getEntry(p.id)?.ptyId
               && canAgentReceivePrompt(terminalRegistry.getEntry(p.id)!.ptyId!))

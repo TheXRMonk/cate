@@ -32,7 +32,7 @@
 import { useStatusStore, workspaceIdForTerminal } from '../../stores/statusStore'
 import { sendOsNotification } from '../notifications/osNotificationSend'
 import type { AgentHookEvent } from '../../../shared/agentHooks'
-import type { AgentState } from '../../../shared/types'
+import type { AgentState, AgentWaitingReason } from '../../../shared/types'
 
 export interface DetectorSignals {
   /** Main's process-tree scan found the agent CLI for this terminal. */
@@ -76,6 +76,8 @@ interface Tracker {
    *  waitingForInput while blocked instead of flipping back to running. */
   hookPermissionWait: boolean
   state: AgentState
+  waitingReason?: AgentWaitingReason
+  committedWaitingReason?: AgentWaitingReason
 }
 
 const trackers = new Map<string, Tracker>()
@@ -113,21 +115,32 @@ function workspaceFor(terminalId: string): string | undefined {
  *  resume cannot re-notify. */
 function commit(terminalId: string, state: AgentState, notify: boolean, permissionBody?: string): void {
   const t = trackers.get(terminalId)
-  if (!t || t.state === state) return
+  if (!t) return
+  const waitingReason = state === 'waitingForInput' ? t.waitingReason : undefined
+  const stateChanged = t.state !== state
+  if (!stateChanged && t.committedWaitingReason === waitingReason) return
   const workspaceId = workspaceFor(terminalId)
   if (!workspaceId) return
 
   t.state = state
+  t.committedWaitingReason = waitingReason
   const status = useStatusStore.getState()
   const agentName = status.workspaces[workspaceId]?.terminals[terminalId]?.agentName ?? null
-  status.setAgentState(workspaceId, terminalId, state, agentName)
-  window.electronAPI?.shellReportAgentScreenState?.(terminalId, state)
+  status.setAgentState(workspaceId, terminalId, state, agentName, waitingReason)
+  window.electronAPI?.shellReportAgentScreenState?.(terminalId, state, waitingReason)
 
-  if (notify && state === 'waitingForInput') {
+  if (notify && stateChanged && state === 'waitingForInput') {
     const displayName = agentName ?? 'Agent'
+    const specific = t.agentId === 'hermes' ? {
+      question: { title: `${displayName} has a question`, body: 'Waiting for your answer.' },
+      'response-complete': { title: `${displayName} response complete`, body: 'Ready for your next prompt.' },
+      interrupted: { title: `${displayName} interrupted`, body: 'The turn was interrupted.' },
+      error: { title: `${displayName} encountered an error`, body: 'Open the terminal for details.' },
+    } : undefined
+    const message = waitingReason && waitingReason !== 'approval' ? specific?.[waitingReason] : undefined
     sendOsNotification({
-      title: permissionBody ? `${displayName} needs permission` : `${displayName} needs input`,
-      body: permissionBody ?? `${displayName} is waiting for your response.`,
+      title: message?.title ?? (permissionBody ? `${displayName} needs permission` : `${displayName} needs input`),
+      body: message?.body ?? permissionBody ?? `${displayName} is waiting for your response.`,
       action: { type: 'focusTerminal', workspaceId, terminalId },
     })
   }
@@ -173,6 +186,10 @@ function recompute(terminalId: string, notifyOnIdle = false, permissionBody?: st
 /** A normalized agent-hook event arrived for a terminal this window owns. */
 export function noteAgentHookEvent(event: AgentHookEvent): void {
   const t = trackerFor(event.terminalId)
+  if (event.agentId === 'hermes' && (event.kind === 'permission-wait' || event.kind === 'turn-resume')) {
+    if (!t.hookTurnActive || t.sessionId !== event.sessionId ||
+        t.activeTurnId !== (event.turnId ?? null)) return
+  }
   t.agentId = event.agentId
   switch (event.kind) {
     case 'input-submit':
@@ -182,10 +199,14 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       noteAgentInterruptSubmitted(event.terminalId)
       break
     case 'turn-start':
+      // Hermes pre_llm may repeat while another tool still awaits a reply.
+      if (event.agentId === 'hermes' && t.hookPermissionWait &&
+          t.sessionId === event.sessionId && t.activeTurnId === (event.turnId ?? null)) break
       t.sessionId = event.sessionId
       t.activeTurnId = event.turnId ?? null
       t.hookTurnActive = true
       t.hookPermissionWait = false
+      t.waitingReason = undefined
       recompute(event.terminalId)
       break
     case 'turn-resume':
@@ -194,6 +215,7 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       if (t.activeTurnId && event.turnId && t.activeTurnId !== event.turnId) break
       t.hookTurnActive = true
       t.hookPermissionWait = false
+      t.waitingReason = undefined
       recompute(event.terminalId)
       break
     case 'turn-end':
@@ -203,6 +225,8 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       t.activeTurnId = null
       t.hookTurnActive = false
       t.hookPermissionWait = false
+      t.waitingReason = undefined
+      t.waitingReason = event.waitingReason ?? 'response-complete'
       recompute(event.terminalId, true)
       break
     case 'session-end':
@@ -211,6 +235,7 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       t.activeTurnId = null
       t.hookTurnActive = false
       t.hookPermissionWait = false
+      t.waitingReason = undefined
       recompute(event.terminalId)
       break
     case 'session-start':
@@ -225,6 +250,7 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       t.activeTurnId = null
       t.hookTurnActive = false
       t.hookPermissionWait = false
+      t.waitingReason = undefined
       recompute(event.terminalId)
       break
     case 'session-title':
@@ -239,6 +265,7 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       // reach a tool call, so in practice presence always lands first.
       if (t.activeTurnId && event.turnId && t.activeTurnId !== event.turnId) break
       t.hookPermissionWait = true
+      t.waitingReason = event.waitingReason ?? 'approval'
       recompute(event.terminalId, true, permissionBodyFor(event))
       break
   }
@@ -251,7 +278,7 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
  *  resumes the agent while it processes that answer, before its Stop. */
 export function noteAgentInputSubmitted(terminalId: string): void {
   const t = trackers.get(terminalId)
-  if (!t?.hookPermissionWait) return
+  if (!t?.hookPermissionWait || t.agentId === 'hermes') return
   t.hookTurnActive = true
   t.hookPermissionWait = false
   recompute(terminalId)
@@ -290,6 +317,7 @@ export function noteAgentPresence(terminalId: string, present: boolean): void {
     t.activeTurnId = null
     t.hookTurnActive = false
     t.hookPermissionWait = false
+    t.waitingReason = undefined
   }
   recompute(terminalId)
 }
@@ -308,10 +336,10 @@ export function stopAgentScreenDetector(): void {
   trackers.clear()
 }
 
-export function applyRemoteAgentScreenState(terminalId: string, state: AgentState): void {
+export function applyRemoteAgentScreenState(terminalId: string, state: AgentState, waitingReason?: AgentWaitingReason): void {
   const status = useStatusStore.getState()
   const workspaceId = workspaceIdForTerminal(terminalId)
   if (!workspaceId) return
   const agentName = status.workspaces[workspaceId]?.terminals[terminalId]?.agentName ?? null
-  status.setAgentState(workspaceId, terminalId, state, agentName)
+  status.setAgentState(workspaceId, terminalId, state, agentName, waitingReason)
 }

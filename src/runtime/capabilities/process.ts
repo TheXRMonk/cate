@@ -18,6 +18,7 @@ import type { TerminalActivity } from '../../shared/types'
 import type { AgentPresenceTracker } from './agentPresence'
 import type { AgentHookConfig } from '../../shared/agentHooks'
 import { catePathEnv } from '../cateCli'
+import { snapshotProcessTreeWindows } from './windowsProcessTree'
 import {
   type ProcTree,
   snapshotProcessTreeProc,
@@ -70,9 +71,10 @@ function snapshotProcessTreePs(): Promise<ProcTree> {
   })
 }
 
-/** Process-table snapshot: /proc on Linux (no fork — #246), `ps` elsewhere.
+/** Process-table snapshot: /proc on Linux, native CIM on Windows, ps on macOS.
  *  Exported for the agent-presence tracker's registration-time walk. */
 export function snapshotProcessTree(): Promise<ProcTree> {
+  if (process.platform === 'win32') return snapshotProcessTreeWindows()
   return isLinux ? snapshotProcessTreeProc() : snapshotProcessTreePs()
 }
 
@@ -106,6 +108,10 @@ function descendantsOf(pid: number, tree: ProcTree): number[] {
 
 function isShellProcess(name: string): boolean {
   const shells = ['zsh', 'bash', 'fish', 'sh', 'tcsh', 'ksh', 'dash']
+  if (process.platform === 'win32') {
+    const executable = name.toLowerCase().split(/[\\/]/).pop()!.replace(/\.exe$/, '')
+    return [...shells, 'cmd', 'powershell', 'pwsh'].includes(executable)
+  }
   return shells.includes(name.toLowerCase())
 }
 
@@ -363,7 +369,7 @@ export function createProcessCapability(deps: ProcessDeps): ProcessCapability {
         .filter((id) => idle.get(id)?.suspended !== true)
         .map((id) => ({ id, pid: ptys.get(id)?.pid }))
         .filter((e): e is { id: string; pid: number } => e.pid != null)
-      if (owned.length === 0 || process.platform === 'win32') return {}
+      if (owned.length === 0) return {}
       const tree = await snapshotProcessTree()
       const out: Record<string, PtyActivity> = {}
       for (const { id, pid } of owned) {

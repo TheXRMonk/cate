@@ -20,7 +20,7 @@ const profile = flag('--profile') || 'default'
 const resumedSessionId = flag('--resume')
 const sessionId = resumedSessionId || `fake_${String(terminalId).replace(/[^A-Za-z0-9_-]/g, '_')}`
 
-function post(hookEventName) {
+function post(hookEventName, extra = {}) {
   if (!endpoint || !token || !terminalId) return Promise.resolve()
   const body = JSON.stringify({
     agentId: 'hermes',
@@ -33,6 +33,8 @@ function post(hookEventName) {
       cwd: process.cwd(),
       profile,
       platform: 'cli',
+      turn_id: 'fixture-turn',
+      ...extra,
     },
   })
   return new Promise((resolve) => {
@@ -83,8 +85,19 @@ void (async () => {
   process.on('SIGTERM', () => { void finish() })
   process.on('SIGINT', () => { void finish() })
   process.stdin.setEncoding('utf8')
-  process.stdin.on('data', (chunk) => {
+  let inputBuffer = ''
+  process.stdin.on('data', (data) => {
+    inputBuffer += data
+    if (!/[\r\n]/.test(inputBuffer)) return
+    const chunk = inputBuffer
+    inputBuffer = ''
     if (chunk.includes('__CATE_E2E_EXIT__')) void finish()
+    if (chunk.includes('__CATE_WAIT_APPROVAL__')) void post('cate_wait_started', { waiting_reason: 'approval' })
+    if (chunk.includes('__CATE_WAIT_QUESTION__')) void post('cate_wait_started', { waiting_reason: 'question' })
+    if (chunk.includes('__CATE_TURN_DONE__')) void post('on_session_end')
+    if (chunk.includes('__CATE_TURN_INTERRUPTED__')) void post('on_session_end', { interrupted: true })
+    if (chunk.includes('__CATE_TURN_ERROR__')) void post('on_session_end', { failed: true })
+    if (chunk.includes('__CATE_TURN_RESUME__')) void post('pre_llm_call')
   })
   process.stdin.resume()
   setInterval(() => {}, 60_000).unref()

@@ -9,7 +9,7 @@ import { revealPanel } from '../lib/workspace/panelReveal'
 import { useWorkspacePanelTree } from '../lib/workspace/useWorkspacePanelTree'
 import { useOtherWindowPanels } from '../stores/windowPanelStore'
 import type { NativeContextMenuItem } from '../../shared/electron-api'
-import type { AgentState } from '../../shared/types'
+import type { AgentState, AgentWaitingReason } from '../../shared/types'
 import { terminalRegistry } from '../lib/terminal/terminalRegistry'
 import {
   closePanelWithConfirm,
@@ -104,6 +104,7 @@ export interface WorkspacePanelRowProps {
   panel: Pick<PanelState, 'id' | 'type' | 'title' | 'filePath' | 'tabs' | 'activeTabId'>
   indent: boolean
   agentState?: AgentState
+  waitingReason?: AgentWaitingReason
   agentLogo?: string | null
   hasPorts?: boolean
   worktreeColor?: string
@@ -119,7 +120,7 @@ export interface WorkspacePanelRowProps {
   titleHint?: string
 }
 
-export const WorkspacePanelRow: React.FC<WorkspacePanelRowProps> = ({ panel, indent, agentState, agentLogo: agentLogoProp, hasPorts = false, worktreeColor, onClick, onClose, rename, titleHint, onContextMenu }) => {
+export const WorkspacePanelRow: React.FC<WorkspacePanelRowProps> = ({ panel, indent, agentState, waitingReason, agentLogo: agentLogoProp, hasPorts = false, worktreeColor, onClick, onClose, rename, titleHint, onContextMenu }) => {
   const Icon = PANEL_ICONS[panel.type] ?? TerminalIcon
   const label = panelRowLabel(panel)
 
@@ -175,7 +176,7 @@ export const WorkspacePanelRow: React.FC<WorkspacePanelRowProps> = ({ panel, ind
         </AgentActivityTitle>
       )}
       {isAwaiting ? (
-        <AwaitingIndicator />
+        <AwaitingIndicator waitingReason={waitingReason} />
       ) : !isRunning && hasPorts ? (
         <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-muted opacity-50" />
       ) : null}
@@ -593,6 +594,7 @@ export const WorkspaceTab: React.FC<WorkspaceTabProps> = ({
           panel={{ id: p.panelId, type: p.type, title: p.title }}
           indent={indent}
           agentState={p.agentState}
+          waitingReason={p.waitingReason}
           agentLogo={getAgentLogo(p.agentName ?? null)}
           hasPorts={!!p.hasPorts}
           worktreeColor={detachedWorktree?.color ?? worktreeColorForId(p.worktreeId)}
@@ -675,6 +677,7 @@ export const WorkspaceTab: React.FC<WorkspaceTabProps> = ({
         panel={p}
         indent={indent}
         agentState={info?.state}
+        waitingReason={info?.waitingReason}
         agentLogo={info?.logo}
         hasPorts={hasPorts}
         worktreeColor={worktreeColorFor(p.id)}

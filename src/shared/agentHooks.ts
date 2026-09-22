@@ -18,6 +18,7 @@
 
 import { createHash } from 'crypto'
 import type { AgentId } from './agents'
+import type { AgentWaitingReason } from './types'
 export {
   resolveAgentHookMode,
   type AgentHookConfig,
@@ -62,6 +63,7 @@ export interface AgentHookEvent {
   terminalId: string
   agentId: AgentId
   kind: AgentHookEventKind
+  waitingReason?: AgentWaitingReason
   /** The CLI's own session/conversation id, or null when the event doesn't
    *  carry one (e.g. a malformed payload field). */
   sessionId: string | null
@@ -892,8 +894,18 @@ const hermesSpec: AgentHookSpec = {
     switch (p.hook_event_name) {
       case 'on_session_start':
       case 'on_session_reset': return { kind: 'session-start', ...base }
-      case 'pre_llm_call': return { kind: 'turn-start', ...base }
-      case 'on_session_end': return { kind: 'turn-end', ...base }
+      case 'pre_llm_call': return { kind: 'turn-start', ...base, turnId: str(p.turn_id) ?? undefined }
+      case 'cate_wait_started':
+        if (p.waiting_reason !== 'approval' && p.waiting_reason !== 'question') return null
+        if (!base.sessionId || !str(p.turn_id)) return null
+        return { kind: 'permission-wait', ...base, turnId: str(p.turn_id)!, waitingReason: p.waiting_reason }
+      case 'cate_wait_resolved':
+        if (!base.sessionId || !str(p.turn_id)) return null
+        return { kind: 'turn-resume', ...base, turnId: str(p.turn_id)! }
+      case 'on_session_end': return {
+        kind: 'turn-end', ...base, turnId: str(p.turn_id) ?? undefined,
+        waitingReason: p.interrupted === true ? 'interrupted' : p.failed === true ? 'error' : 'response-complete',
+      }
       case 'on_session_finalize': return { kind: 'session-end', ...base }
       default: return null
     }

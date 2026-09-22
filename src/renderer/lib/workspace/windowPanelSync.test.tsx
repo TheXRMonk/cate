@@ -186,6 +186,11 @@ describe('windowPanelSync — canvas child parentCanvasId', () => {
     expect(reports.length).toBeGreaterThan(0)
     byId = Object.fromEntries(reports[reports.length - 1].filter((r) => r.workspaceId === ws).map((r) => [r.panelId, r]))
     expect(byId.a1?.agentState).toBe('waitingForInput')
+    reports.length = 0
+    status.setAgentState(ws, 'a1', 'waitingForInput', 'Claude Code', 'question')
+    await new Promise((r) => setTimeout(r, 300))
+    expect(reports.length).toBeGreaterThan(0)
+    expect(reports.at(-1)?.find((r) => r.panelId === 'a1')?.waitingReason).toBe('question')
 
     stop()
   })

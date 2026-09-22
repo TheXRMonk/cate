@@ -103,6 +103,19 @@ afterEach(() => {
 })
 
 describe('cross-window panel discovery (main)', () => {
+  it('broadcasts reason-only report and upsert changes', () => {
+    const win = open(101, 'dock', 'ws-A')
+    const row = { ...report('t1', 'terminal', 'Hermes'), agentState: 'waitingForInput' as const }
+    setWindowPanels(101, [{ ...row, waitingReason: 'approval' }])
+    expect(broadcastsTo(win).at(-1)?.[0].waitingReason).toBe('approval')
+    const count = broadcastsTo(win).length
+    setWindowPanels(101, [{ ...row, waitingReason: 'question' }])
+    expect(broadcastsTo(win)).toHaveLength(count + 1)
+    expect(broadcastsTo(win).at(-1)?.[0].waitingReason).toBe('question')
+    upsertWindowPanel(101, { ...row, waitingReason: 'error' })
+    expect(broadcastsTo(win).at(-1)?.[0].waitingReason).toBe('error')
+  })
+
   it('flattens each window\'s reported panels, stamped with owner + type', () => {
     open(101, 'dock', 'ws-A')
     setWindowPanels(101, [

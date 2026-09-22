@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from 'playwright'
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -98,13 +99,20 @@ test('two Hermes terminals cold-restore their own exact profile-scoped sessions'
   mkdirSync(workspace, { recursive: true })
   mkdirSync(binDir, { recursive: true })
 
+  // Presence validates the hook sender's process name, not the launcher script.
+  // Give the fixture a real Hermes-named process without changing production matchers.
+  const runtimeDir = path.join(root, 'runtime')
+  mkdirSync(runtimeDir)
+  const fixtureRuntime = path.join(runtimeDir, process.platform === 'win32' ? 'hermes.exe' : 'hermes')
+  copyFileSync(realpathSync(process.execPath), fixtureRuntime)
+  chmodSync(fixtureRuntime, 0o755)
   const fixture = path.resolve(__dirname, 'fixtures', 'fake-hermes-session.cjs')
   const launcher = path.join(binDir, 'hermes')
-  writeFileSync(launcher, `#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`)
+  writeFileSync(launcher, `#!/bin/sh\nexec "${fixtureRuntime}" "${fixture}" "$@"\n`)
   chmodSync(launcher, 0o755)
   writeFileSync(
     path.join(binDir, 'hermes.cmd'),
-    `@echo off\r\n"${process.execPath}" "${fixture}" %*\r\n`,
+    `@echo off\r\n"${fixtureRuntime}" "${fixture}" %*\r\n`,
   )
 
   const system32 = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
@@ -159,6 +167,25 @@ test('two Hermes terminals cold-restore their own exact profile-scoped sessions'
     const before = await panelSessions(page, panels)
     const sessionIds = before.map((session) => session!.sessionId)
     expect(new Set(sessionIds).size).toBe(2)
+
+    // Drive each status through the authenticated PTY hook path; keep the
+    // second pane working to prove a wait cannot bleed across terminals.
+    const firstPane = page.locator(`[data-node-id="${nodes[0]}"]`)
+    const secondPane = page.locator(`[data-node-id="${nodes[1]}"]`)
+    for (const [command, label] of [
+      ['__CATE_WAIT_APPROVAL__', 'Awaiting approval'],
+      ['__CATE_WAIT_QUESTION__', 'Awaiting answer'],
+      ['__CATE_TURN_DONE__', 'Response complete'],
+      ['__CATE_TURN_INTERRUPTED__', 'Interrupted'],
+      ['__CATE_TURN_ERROR__', 'Agent error'],
+    ]) {
+      await page.evaluate(({ id, command }) => window.__cateE2E!.writeTerminal(id, `${command}\r`),
+        { id: nodes[0], command })
+      await expect(firstPane.getByLabel(label, { exact: true })).toBeVisible()
+      await expect(secondPane.locator('.cate-await-indicator')).toHaveCount(0)
+    }
+    await page.evaluate((id) => window.__cateE2E!.writeTerminal(id, '__CATE_TURN_RESUME__\r'), nodes[0])
+    await expect(firstPane.locator('.cate-await-indicator')).toHaveCount(0)
 
     // Give the normal autosave debounce time to persist the stamped panels.
     await page.waitForTimeout(1_000)

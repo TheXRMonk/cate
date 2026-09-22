@@ -620,6 +620,20 @@ describe('hermes spec', () => {
     platform: 'cli',
   }
 
+  test('normalizes correlated Hermes waits and completion reasons', () => {
+    for (const reason of ['approval', 'question']) {
+      expect(norm('hermes', { ...base, hook_event_name: 'cate_wait_started', turn_id: 'turn', waiting_reason: reason }))
+        .toMatchObject({ kind: 'permission-wait', turnId: 'turn', waitingReason: reason })
+    }
+    expect(norm('hermes', { ...base, hook_event_name: 'cate_wait_resolved', turn_id: 'turn' }))
+      .toMatchObject({ kind: 'turn-resume', turnId: 'turn' })
+    expect(norm('hermes', { ...base, hook_event_name: 'on_session_end', failed: true }))
+      .toMatchObject({ kind: 'turn-end', waitingReason: 'error' })
+    expect(norm('hermes', { ...base, hook_event_name: 'on_session_end', interrupted: true }))
+      .toMatchObject({ kind: 'turn-end', waitingReason: 'interrupted' })
+    expect(norm('hermes', { ...base, hook_event_name: 'cate_wait_started', waiting_reason: 'invented' })).toBeNull()
+  })
+
   test('uses the profile-scoped external plugin delivery channel', () => {
     expect(spec.externalPlugin).toEqual({ id: 'cate-agent-state' })
     expect(spec.projectFiles).toBeUndefined()

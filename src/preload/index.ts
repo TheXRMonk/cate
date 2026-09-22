@@ -274,7 +274,7 @@ import {
   CATE_HOST_FORWARD,
   CATE_HOST_FORWARD_REPLY,
 } from '../shared/ipc-channels'
-import type { AppSettings, SearchResultBatch, SearchDoneEvent } from '../shared/types'
+import type { AppSettings, AgentState, AgentWaitingReason, SearchResultBatch, SearchDoneEvent } from '../shared/types'
 import type { ElectronAPI, UpdateStatus } from '../shared/electron-api'
 
 // Cache native-fullscreen state so renderer drag handlers can synchronously
@@ -702,12 +702,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return createIpcListener(SHELL_AGENT_HOOK_EVENT, callback)
   },
 
-  shellReportAgentScreenState(terminalId: string, state: string): void {
-    ipcRenderer.send(SHELL_AGENT_SCREEN_STATE, terminalId, state)
+  shellReportAgentScreenState(terminalId: string, state: AgentState, waitingReason?: AgentWaitingReason): void {
+    ipcRenderer.send(SHELL_AGENT_SCREEN_STATE, terminalId, state, waitingReason)
   },
 
   onAgentScreenStateUpdate(
-    callback: (terminalId: string, state: string) => void,
+    callback: (terminalId: string, state: AgentState, waitingReason?: AgentWaitingReason) => void,
   ): () => void {
     return createIpcListener(SHELL_AGENT_SCREEN_STATE, callback)
   },

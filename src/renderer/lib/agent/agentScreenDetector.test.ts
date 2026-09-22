@@ -2,6 +2,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import {
   resolveAgentState,
+  applyRemoteAgentScreenState,
   startAgentScreenDetector,
   stopAgentScreenDetector,
   noteAgentPresence,
@@ -78,6 +79,82 @@ function hookEvent(
 describe('agent activity coordinator (hook FSM + presence edges)', () => {
   beforeEach(() => setUpCoordinator('Claude Code'))
   afterEach(stopAgentScreenDetector)
+
+  it('labels question and completion notifications without calling them permission requests', () => {
+    noteAgentPresence(PTY, true)
+    noteAgentHookEvent(hookEvent('turn-start', 'hermes'))
+    noteAgentHookEvent({ ...hookEvent('permission-wait', 'hermes'), waitingReason: 'question' })
+    expect(sendOsNotification).toHaveBeenLastCalledWith(expect.objectContaining({
+      title: 'Claude Code has a question', body: 'Waiting for your answer.',
+    }))
+    noteAgentHookEvent(hookEvent('turn-resume', 'hermes'))
+    noteAgentHookEvent({ ...hookEvent('turn-end', 'hermes'), waitingReason: 'response-complete' })
+    expect(sendOsNotification).toHaveBeenLastCalledWith(expect.objectContaining({ title: 'Claude Code response complete' }))
+  })
+
+  it('rejects completed-turn waits and permits a genuinely new Hermes turn', () => {
+    noteAgentPresence(PTY, true)
+    const first = { ...hookEvent('turn-start', 'hermes'), turnId: 't1' }
+    noteAgentHookEvent(first)
+    noteAgentHookEvent({ ...first, kind: 'turn-end' })
+    noteAgentHookEvent({ ...first, kind: 'permission-wait', waitingReason: 'question' })
+    expect(canAgentReceivePrompt(PTY)).toBe(true)
+    noteAgentHookEvent({ ...first, turnId: 't2' })
+    expect(state()).toBe('running')
+    noteAgentHookEvent({ ...first, turnId: 't2', kind: 'permission-wait' })
+    noteAgentHookEvent({ ...first, turnId: 't3' })
+    expect(state()).toBe('running')
+    noteAgentHookEvent({ ...first, kind: 'session-start', sessionId: 'new-session' })
+    noteAgentHookEvent({ ...first, kind: 'permission-wait' })
+    expect(canAgentReceivePrompt(PTY)).toBe(true)
+  })
+
+  it('applies remote reasons and clears them when running', () => {
+    applyRemoteAgentScreenState(PTY, 'waitingForInput', 'question')
+    expect(useStatusStore.getState().workspaces[WS].terminals[PTY].waitingReason).toBe('question')
+    applyRemoteAgentScreenState(PTY, 'running')
+    expect(useStatusStore.getState().workspaces[WS].terminals[PTY].waitingReason).toBeUndefined()
+  })
+
+  it('Hermes waits require authoritative resume, not Enter or pre_llm', () => {
+    noteAgentPresence(PTY, true)
+    noteAgentHookEvent(hookEvent('turn-start', 'hermes'))
+    noteAgentHookEvent(hookEvent('permission-wait', 'hermes'))
+    noteAgentInputSubmitted(PTY)
+    expect(state()).toBe('waitingForInput')
+    noteAgentHookEvent(hookEvent('turn-start', 'hermes'))
+    expect(state()).toBe('waitingForInput')
+    expect(canAgentReceivePrompt(PTY)).toBe(false)
+    noteAgentHookEvent(hookEvent('turn-resume', 'hermes'))
+    expect(state()).toBe('running')
+    expect(useStatusStore.getState().workspaces[WS].terminals[PTY].waitingReason).toBeUndefined()
+  })
+
+  it('publishes reason-only changes without repeating notifications', () => {
+    window.electronAPI = { shellReportAgentScreenState: vi.fn() } as unknown as typeof window.electronAPI
+    const reason = () => useStatusStore.getState().workspaces[WS].terminals[PTY].waitingReason
+    noteAgentPresence(PTY, true)
+    expect(reason()).toBeUndefined()
+    noteAgentHookEvent(hookEvent('turn-start'))
+    noteAgentHookEvent(hookEvent('permission-wait'))
+    expect(reason()).toBe('approval')
+    noteAgentHookEvent({ ...hookEvent('permission-wait'), waitingReason: 'question' })
+    expect(reason()).toBe('question')
+    expect(window.electronAPI.shellReportAgentScreenState).toHaveBeenLastCalledWith(PTY, 'waitingForInput', 'question')
+    noteAgentHookEvent(hookEvent('turn-end'))
+    expect(reason()).toBe('response-complete')
+    expect(sendOsNotification).toHaveBeenCalledTimes(1)
+    noteAgentHookEvent(hookEvent('session-end'))
+    expect(reason()).toBeUndefined()
+    for (const waitingReason of ['error', 'interrupted'] as const) {
+      noteAgentHookEvent(hookEvent('turn-start'))
+      expect(reason()).toBeUndefined()
+      noteAgentHookEvent({ ...hookEvent('turn-end'), waitingReason })
+      expect(reason()).toBe(waitingReason)
+    }
+    noteAgentPresence(PTY, false)
+    expect(reason()).toBeUndefined()
+  })
 
   it('turn-start → running immediately; turn-end → waitingForInput + notification', () => {
     noteAgentPresence(PTY, true)

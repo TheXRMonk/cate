@@ -1,3 +1,4 @@
+import type { AgentWaitingReason } from '../../shared/types'
 import type { HTMLAttributes, ReactNode } from 'react'
 import { worktreeTitleStyle } from '../lib/worktreeTitleStyle'
 
@@ -27,9 +28,18 @@ export function AgentActivityTitle({
   )
 }
 
-export function AwaitingIndicator({ className = '' }: { className?: string }) {
+const WAITING_LABELS: Record<AgentWaitingReason, string> = {
+  approval: 'Awaiting approval',
+  question: 'Awaiting answer',
+  'response-complete': 'Response complete',
+  interrupted: 'Interrupted',
+  error: 'Agent error',
+}
+
+export function AwaitingIndicator({ className = '', waitingReason }: { className?: string; waitingReason?: AgentWaitingReason }) {
+  const label = waitingReason ? WAITING_LABELS[waitingReason] : 'awaiting input'
   return (
-    <span className={`cate-await-indicator shrink-0 ${className}`} aria-label="awaiting input">
+    <span className={`cate-await-indicator shrink-0 ${className}`} aria-label={label} title={label}>
       <span className="cate-await-dot" style={{ backgroundColor: AWAIT_COLOR }} />
     </span>
   )

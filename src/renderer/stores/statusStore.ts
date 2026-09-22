@@ -1,9 +1,10 @@
 import { create } from 'zustand'
-import type { AgentState, TerminalActivity } from '../../shared/types'
+import type { AgentState, AgentWaitingReason, TerminalActivity } from '../../shared/types'
 
 export interface TerminalRuntimeStatus {
   activity: TerminalActivity
   agentState: AgentState
+  waitingReason?: AgentWaitingReason
   agentName: string | null
   agentPresent: boolean
   listeningPorts: number[]
@@ -31,7 +32,7 @@ export function workspaceIdForTerminal(ptyId: string): string | undefined {
 
 interface StatusStoreActions {
   setTerminalActivity: (workspaceId: string, terminalId: string, activity: TerminalActivity) => void
-  setAgentState: (workspaceId: string, terminalId: string, state: AgentState, name: string | null) => void
+  setAgentState: (workspaceId: string, terminalId: string, state: AgentState, name: string | null, waitingReason?: AgentWaitingReason) => void
   setAgentName: (workspaceId: string, terminalId: string, name: string | null) => void
   setAgentPresent: (workspaceId: string, terminalId: string, present: boolean) => void
   statusText: (workspaceId: string) => string
@@ -108,9 +109,9 @@ export const useStatusStore = create<StatusStore>((set, get) => ({
     })
   },
 
-  setAgentState(workspaceId, terminalId, agentState, agentName) {
+  setAgentState(workspaceId, terminalId, agentState, agentName, waitingReason) {
     set((state) => ({
-      workspaces: patchTerminal(state.workspaces, workspaceId, terminalId, { agentState, agentName }),
+      workspaces: patchTerminal(state.workspaces, workspaceId, terminalId, { agentState, agentName, waitingReason: agentState === 'waitingForInput' ? waitingReason : undefined }),
     }))
   },
 

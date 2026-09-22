@@ -459,6 +459,16 @@ describe('panel-row rename seed', () => {
 // ---------------------------------------------------------------------------
 
 describe('detached section', () => {
+  it('shows local and detached waiting reasons', async () => {
+    const ws = seed(makeWorkspace([panel('local', 'terminal')]))
+    useStatusStore.getState().setAgentState(WS, 'local', 'waitingForInput', 'Hermes', 'approval')
+    useWindowPanelStore.setState({ panels: [detached('remote', 'terminal', { agentState: 'waitingForInput', waitingReason: 'question' })] })
+    await renderTab(ws)
+    const labels = Array.from(host.querySelectorAll('.cate-await-indicator')).map((el) => el.getAttribute('aria-label'))
+    expect(labels).toContain('Awaiting approval')
+    expect(labels).toContain('Awaiting answer')
+  })
+
   function seedDetachedUnion(): WorkspaceState {
     const ws = seed(makeWorkspace([]))
     useWindowPanelStore.setState({
