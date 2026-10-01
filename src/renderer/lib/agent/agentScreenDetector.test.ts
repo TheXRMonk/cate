@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import {
+  applyRemoteAgentScreenState,
   resolveAgentState,
   startAgentScreenDetector,
   stopAgentScreenDetector,
@@ -72,6 +73,84 @@ function hookEvent(
 ): AgentHookEvent {
   return { terminalId: PTY, agentId, kind, sessionId: 'session-1', raw }
 }
+
+describe('correlated attention', () => {
+  beforeEach(() => setUpCoordinator('hermes'))
+  afterEach(stopAgentScreenDetector)
+  const event = (kind: AgentHookEventKind, extra: Partial<AgentHookEvent> = {}): AgentHookEvent => ({
+    ...hookEvent(kind, 'hermes'), turnId: 'turn-1', ...extra,
+  })
+  const reason = () => useStatusStore.getState().workspaces[WS].terminals[PTY].waitingReason
+  it('preserves same-turn waits and propagates reason-only changes without duplicate notifications', () => {
+    noteAgentPresence(PTY, true)
+    noteAgentHookEvent(event('turn-start'))
+    noteAgentHookEvent(event('wait-start', { waitingReason: 'approval' }))
+    expect(reason()).toBe('approval')
+    noteAgentHookEvent(event('turn-start'))
+    expect(state()).toBe('waitingForInput')
+    noteAgentHookEvent(event('wait-start', { waitingReason: 'question' }))
+    expect(reason()).toBe('question')
+    expect(notify).toHaveBeenCalledTimes(1)
+    noteAgentHookEvent(event('wait-resolved'))
+    expect(state()).toBe('running')
+    expect(reason()).toBeUndefined()
+  })
+  it('requires matching active session and turn, and supersedes waits on a new turn', () => {
+    noteAgentPresence(PTY, true)
+    noteAgentHookEvent(event('wait-start', { waitingReason: 'question' }))
+    expect(reason()).toBeUndefined()
+    noteAgentHookEvent(event('turn-start'))
+    for (const extra of [{ sessionId: 'other' }, { sessionId: null }, { turnId: undefined }, { turnId: 'other' }]) {
+      noteAgentHookEvent(event('wait-start', { waitingReason: 'question', ...extra }))
+      expect(state()).toBe('running')
+    }
+    noteAgentHookEvent(event('wait-start', { waitingReason: 'question' }))
+    noteAgentInputSubmitted(PTY)
+    expect(state()).toBe('waitingForInput')
+    noteAgentHookEvent(event('turn-start', { turnId: 'turn-2' }))
+    expect(state()).toBe('running')
+    noteAgentHookEvent(event('wait-start', { waitingReason: 'approval' }))
+    expect(state()).toBe('running')
+  })
+  it('does not displace T2 with a delayed completed T1 turn-start and wait', () => {
+    noteAgentPresence(PTY, true)
+    noteAgentHookEvent(event('turn-start'))
+    noteAgentHookEvent(event('turn-end', { waitingReason: 'response-complete' }))
+    noteAgentHookEvent(event('turn-start', { turnId: 'turn-2' }))
+    notify.mockClear()
+
+    noteAgentHookEvent(event('turn-start'))
+    noteAgentHookEvent(event('wait-start', { waitingReason: 'question' }))
+    expect.soft(state()).toBe('running')
+    expect.soft(reason()).toBeUndefined()
+    expect.soft(notify).not.toHaveBeenCalled()
+
+    noteAgentHookEvent(event('wait-start', { turnId: 'turn-2', waitingReason: 'approval' }))
+    expect(state()).toBe('waitingForInput')
+    expect(reason()).toBe('approval')
+    noteAgentHookEvent(event('wait-resolved', { turnId: 'turn-2' }))
+    expect(state()).toBe('running')
+  })
+  it.each(['response-complete', 'error', 'interrupted'] as const)('records %s and suppresses interrupted notifications', (waitingReason) => {
+    noteAgentPresence(PTY, true)
+    noteAgentHookEvent(event('turn-start'))
+    noteAgentHookEvent(event('turn-end', { waitingReason, ...(waitingReason === 'interrupted' ? { interrupted: true as const } : {}) }))
+    expect(reason()).toBe(waitingReason)
+    expect(notify).toHaveBeenCalledTimes(waitingReason === 'interrupted' ? 0 : 1)
+    noteAgentPresence(PTY, false)
+    expect(reason()).toBeUndefined()
+  })
+  it('directly applies remote reason updates and clears them on running without notifying', () => {
+    applyRemoteAgentScreenState(PTY, 'waitingForInput', 'approval')
+    expect(reason()).toBe('approval')
+    applyRemoteAgentScreenState(PTY, 'waitingForInput', 'question')
+    expect(reason()).toBe('question')
+    applyRemoteAgentScreenState(PTY, 'running', 'question')
+    expect(reason()).toBeUndefined()
+    applyRemoteAgentScreenState('unknown', 'waitingForInput', 'error')
+    expect(notify).not.toHaveBeenCalled()
+  })
+})
 
 describe('agent activity coordinator (hook FSM + presence edges)', () => {
   beforeEach(() => setUpCoordinator('claude-code'))

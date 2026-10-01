@@ -103,6 +103,63 @@ afterEach(() => {
 })
 
 describe('cross-window panel discovery (main)', () => {
+  describe.each([
+    ['report', (row: WindowPanelReport) => setWindowPanels(1, [row])],
+    ['upsert', (row: WindowPanelReport) => upsertWindowPanel(1, row)],
+  ] as const)('%s waiting reason validation', (_name, submit) => {
+    it.each(['approval', 'question', 'response-complete', 'interrupted', 'error'] as const)(
+      'retains %s only while waiting and clears it on state changes',
+      (waitingReason) => {
+        const main = open(1, 'main', 'ws-A')
+        const row: WindowPanelReport = {
+          ...report('waiting', 'terminal', 'Agent'),
+          agentState: 'waitingForInput',
+          waitingReason,
+        }
+        for (const agentState of ['running', 'notRunning', 'finished', undefined] as const) {
+          submit(row)
+          expect(getWindowPanels()[0].waitingReason).toBe(waitingReason)
+          expect(broadcastsTo(main).at(-1)?.[0].waitingReason).toBe(waitingReason)
+          submit({ ...row, agentState })
+          expect(getWindowPanels()[0]).toMatchObject({ agentState, waitingReason: undefined })
+          expect(broadcastsTo(main).at(-1)?.[0]).toMatchObject({ agentState, waitingReason: undefined })
+        }
+      },
+    )
+    it.each(['unknown', '', 'Approval', ' approval ', null, 42, {}, ['approval']])(
+      'omits invalid waitingReason %j without discarding panel metadata',
+      (waitingReason) => {
+        const main = open(1, 'main', 'ws-A')
+        const row: WindowPanelReport = {
+          ...report('waiting', 'terminal', 'Agent', 'canvas'),
+          agentState: 'waitingForInput',
+          agentCanReceivePrompt: true,
+          agentId: 'hermes',
+          worktreeId: 'feature',
+          waitingReason: waitingReason as WindowPanelReport['waitingReason'],
+        }
+        submit(row)
+        const expected = { ...row, waitingReason: undefined, ownerWindowId: 1, ownerWindowType: 'main' }
+        expect(getWindowPanels()[0]).toMatchObject(expected)
+        expect(broadcastsTo(main).at(-1)?.[0]).toMatchObject(expected)
+        expect(row.waitingReason).toBe(waitingReason)
+      },
+    )
+  })
+
+  it('preserves and broadcasts reason-only updates through reports and upserts', () => {
+    const main = open(1, 'main', 'ws-A')
+    const row: WindowPanelReport = { ...report('waiting', 'terminal', 'Agent'), agentState: 'waitingForInput', waitingReason: 'approval' }
+    setWindowPanels(1, [row])
+    expect(getWindowPanels()[0].waitingReason).toBe('approval')
+    const before = broadcastsTo(main).length
+    setWindowPanels(1, [{ ...row, waitingReason: 'question' }])
+    expect(broadcastsTo(main)).toHaveLength(before + 1)
+    expect(broadcastsTo(main).at(-1)?.[0].waitingReason).toBe('question')
+    upsertWindowPanel(1, { ...row, waitingReason: 'error' })
+    expect(getWindowPanels()[0].waitingReason).toBe('error')
+    expect(broadcastsTo(main).at(-1)?.[0].waitingReason).toBe('error')
+  })
   it('flattens each window\'s reported panels, stamped with owner + type', () => {
     open(101, 'dock', 'ws-A')
     setWindowPanels(101, [

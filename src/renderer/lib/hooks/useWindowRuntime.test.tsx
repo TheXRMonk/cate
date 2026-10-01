@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   startAgentScreenDetector: vi.fn(),
   stopAgentScreenDetector: vi.fn(),
   noteAgentHookEvent: vi.fn(),
+  applyRemoteAgentScreenState: vi.fn(),
   revealPanel: vi.fn(),
   loadSettings: vi.fn(),
   loadUIState: vi.fn(),
@@ -43,7 +44,7 @@ vi.mock('./useThemeAndScaleHydration', () => ({ useThemeAndScaleHydration: h.use
 vi.mock('../agent/agentScreenDetector', () => ({
   startAgentScreenDetector: h.startAgentScreenDetector,
   stopAgentScreenDetector: h.stopAgentScreenDetector,
-  applyRemoteAgentScreenState: vi.fn(),
+  applyRemoteAgentScreenState: h.applyRemoteAgentScreenState,
   noteAgentHookEvent: h.noteAgentHookEvent,
 }))
 vi.mock('../workspace/panelReveal', () => ({ revealPanel: h.revealPanel }))
@@ -125,6 +126,11 @@ function mount() {
 }
 
 describe('useWindowRuntime', () => {
+  it('forwards remote waiting reasons to the screen coordinator', () => {
+    mount()
+    act(() => captured.agent('pty', 'waitingForInput', 'approval'))
+    expect(h.applyRemoteAgentScreenState).toHaveBeenCalledWith('pty', 'waitingForInput', 'approval')
+  })
   it('composes the shared window behaviors', () => {
     mount()
     expect(h.useThemeAndScaleHydration).toHaveBeenCalled()

@@ -19,6 +19,7 @@
 // =============================================================================
 
 import { createHash } from 'crypto'
+import type { AgentWaitingReason } from './types'
 import { AGENTS, type AgentId } from './agents'
 import type { AgentApprovalDetection, AgentApprovalMode } from './agentApprovalModes'
 export {
@@ -49,6 +50,9 @@ export type AgentHookEventKind =
    *  is transported on the hook stream because it has the same terminal +
    *  session identity, but it is metadata rather than a hook lifecycle edge. */
   | 'session-title'
+  /** Correlated human waits; valid only within an already active turn. */
+  | 'wait-start'
+  | 'wait-resolved'
   | 'turn-start'
   | 'turn-end'
   /** A permission decision is in progress; it may be resolved automatically.
@@ -94,6 +98,7 @@ export interface AgentHookEvent {
   approvalMode?: AgentApprovalMode
   /** permission-check / permission-wait only: what the agent asks to do, when the CLI says. */
   permission?: string
+  waitingReason?: AgentWaitingReason
   /** turn-end only: the runtime recovered this turn end from a user
    *  interrupt the CLI did not report (see AgentHookSpec.interrupt). */
   interrupted?: true
@@ -120,7 +125,7 @@ export interface AgentToolCall {
 }
 
 export type NormalizedHookFields = Pick<AgentHookEvent, 'kind' | 'sessionId'> &
-  Partial<Pick<AgentHookEvent, 'cwd' | 'transcriptPath' | 'profile' | 'permission'>>
+  Partial<Pick<AgentHookEvent, 'cwd' | 'transcriptPath' | 'profile' | 'permission' | 'waitingReason' | 'interrupted'>>
 
 export function normalizeAgentSourceStartedAt(value: unknown): string | undefined {
   if (typeof value !== 'string' || !/^[0-9]{1,32}$/.test(value)) return undefined
@@ -971,6 +976,8 @@ const hermesSpec: AgentHookSpec = {
   // The profile-wide plugin reports only for terminals where it is enabled.
   ptyEnv: (enabled) => ({ CATE_HERMES_HOOKS: enabled ? '1' : '0' }),
   normalize: (p) => {
+    // New bridges use correlated waits exclusively; raw tools still feed edit capture.
+    if (p.cate_wait_protocol === 1 && ['pre_approval_request', 'post_approval_response', 'post_tool_call'].includes(String(p.hook_event_name))) return null
     const platform = str(p.platform)
     if (platform && !HERMES_INTERACTIVE_PLATFORMS.has(platform)) return null
     const base = {
@@ -983,7 +990,17 @@ const hermesSpec: AgentHookSpec = {
       case 'on_session_start':
       case 'on_session_reset': return { kind: 'session-start', ...base }
       case 'pre_llm_call': return { kind: 'turn-start', ...base }
-      case 'on_session_end': return { kind: 'turn-end', ...base }
+      case 'cate_wait_started':
+        if (!base.sessionId || !base.turnId || !['approval', 'question'].includes(String(p.waiting_reason))) return null
+        return { kind: 'wait-start', ...base, waitingReason: p.waiting_reason as 'approval' | 'question' }
+      case 'cate_wait_resolved':
+        if (!base.sessionId || !base.turnId) return null
+        return { kind: 'wait-resolved', ...base }
+      case 'on_session_end':
+        return { kind: 'turn-end', ...base,
+          waitingReason: p.interrupted === true ? 'interrupted' : p.failed === true ? 'error' : 'response-complete',
+          ...(p.interrupted === true ? { interrupted: true as const } : {}),
+        }
       case 'pre_approval_request':
         // Smart review and plugin transports may resolve without a human.
         // Older bridges omit surface; absence is not proof of a human wait.

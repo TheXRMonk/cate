@@ -17,7 +17,7 @@ vi.mock('../lib/terminal/terminalRegistry', () => ({
 vi.mock('../lib/logger', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 
 import { TerminalPanelRow, type PanelRenameProps } from './WorkspaceTab'
-import type { AgentState } from '../../shared/types'
+import type { AgentState, AgentWaitingReason } from '../../shared/types'
 
 let host: HTMLDivElement
 let root: Root
@@ -33,13 +33,14 @@ afterEach(() => {
   host.remove()
 })
 
-function renderRow(agentState: AgentState | undefined) {
+function renderRow(agentState: AgentState | undefined, waitingReason?: AgentWaitingReason) {
   act(() => {
     root.render(
       <TerminalPanelRow
         panel={{ id: 'p1', type: 'terminal', title: 'Terminal 1' }}
         indent={false}
         agentState={agentState}
+        waitingReason={waitingReason}
         hasPorts={false}
         onClick={() => {}}
       />,
@@ -57,6 +58,15 @@ function hasAwaitIndicator(el: HTMLElement): boolean {
 }
 
 describe('TerminalPanelRow rendered indicators', () => {
+  it.each([
+    ['approval', 'Awaiting approval'], ['question', 'Awaiting answer'],
+    ['response-complete', 'Response complete'], ['interrupted', 'Interrupted'],
+    ['error', 'Agent error'], [undefined, 'awaiting input'],
+  ] as const)('labels %s attention accessibly', (reason, label) => {
+    const indicator = renderRow('waitingForInput', reason).querySelector('.cate-await-indicator')!
+    expect(indicator.getAttribute('aria-label')).toBe(label)
+    expect(indicator.getAttribute('title')).toBe(label)
+  })
   it('no agent state → no shimmer, no await', () => {
     const el = renderRow(undefined)
     expect(hasShimmer(el)).toBe(false)

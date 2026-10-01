@@ -99,7 +99,8 @@ function parentMap(tree: ProcTree): Map<number, number> {
 export function createAgentPresenceTracker(deps: AgentPresenceDeps): AgentPresenceTracker {
   const isAlive = deps.isAlive ?? defaultIsAlive
   const registrations = new Map<string, Registration>()
-  const sourceStartedHighWater = new Map<string, bigint>()
+  const sourceStartedHighWater = new Map<string, { clock: bigint; pid: number }>()
+  const terminalEpochs = new Map<string, object>()
 
   return {
     async notePost(terminalId, agentId, pid, sourceStartedAt) {
@@ -109,28 +110,35 @@ export function createAgentPresenceTracker(deps: AgentPresenceDeps): AgentPresen
       if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return
       const def = AGENTS.find((a) => a.id === agentId)
       if (!def) return
+      let epoch = terminalEpochs.get(terminalId)
+      if (!epoch) {
+        epoch = {}
+        terminalEpochs.set(terminalId, epoch)
+      }
       const canonicalStartedAt = normalizeAgentSourceStartedAt(sourceStartedAt)
-      if (def.hookProcess === 'self' && canonicalStartedAt) {
-        const incoming = BigInt(canonicalStartedAt)
+      const staleGeneration = (): boolean => {
         const current = sourceStartedHighWater.get(terminalId)
-        if (current !== undefined && incoming < current) return
-        sourceStartedHighWater.set(terminalId, incoming)
+        if (def.hookProcess !== 'self' || !current) return false
+        if (!canonicalStartedAt) return true
+        const incoming = BigInt(canonicalStartedAt)
+        return incoming < current.clock || (incoming === current.clock && pid !== current.pid)
+      }
+      if (staleGeneration()) return
+      if (def.hookProcess === 'self' && canonicalStartedAt) {
+        sourceStartedHighWater.set(terminalId, { clock: BigInt(canonicalStartedAt), pid })
       }
 
       // Fast path: this terminal's agent is already registered and alive —
       // the common per-tool-call event needs no snapshot.
       const existing = registrations.get(terminalId)
       if (existing && existing.agentId === agentId && isAlive(existing.pid)
-        && (def.hookProcess !== 'self' || existing.pid === pid)) return
+        && (def.hookProcess !== 'self' || (existing.pid === pid
+          && existing.sourceStartedAt === canonicalStartedAt))) return
 
       const tree = await deps.snapshot()
+      // A dropped/reused terminal must not accept a pre-drop lookup.
+      if (terminalEpochs.get(terminalId) !== epoch || staleGeneration()) return
       if (def.hookProcess === 'self') {
-        // A slower lookup from an older Hermes process must not overwrite the
-        // registration installed by a newer hook post while this awaited.
-        if (canonicalStartedAt) {
-          const current = sourceStartedHighWater.get(terminalId)
-          if (current !== undefined && BigInt(canonicalStartedAt) < current) return
-        }
         const comm = tree.nameByPid.get(pid)
         if (comm) registrations.set(terminalId, { agentId, pid, comm, sourceStartedAt: canonicalStartedAt })
         return
@@ -179,6 +187,7 @@ export function createAgentPresenceTracker(deps: AgentPresenceDeps): AgentPresen
     drop(terminalId) {
       registrations.delete(terminalId)
       sourceStartedHighWater.delete(terminalId)
+      terminalEpochs.delete(terminalId)
     },
   }
 }

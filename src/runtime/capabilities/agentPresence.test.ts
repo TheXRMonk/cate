@@ -137,6 +137,62 @@ describe('notePost → presenceFor', () => {
     expect(tracker.presenceFor(T, onlyNew)).toEqual({ agentId: 'hermes', agentPresent: true })
   })
 
+  test('a live Hermes pid advances its clock so the falling edge identifies the latest generation', async () => {
+    const processes = tree([[90, 10, 'python3']])
+    let alive = true
+    const { tracker } = makeTracker(processes, { alive: () => alive })
+    await tracker.notePost(T, 'hermes', 90, '100')
+    await tracker.notePost(T, 'hermes', 90, '200')
+    expect(tracker.presenceFor(T, processes)).toEqual({ agentId: 'hermes', agentPresent: true })
+
+    alive = false
+    expect(tracker.presenceFor(T, tree([]))).toEqual({
+      agentId: null,
+      agentPresent: false,
+      endedAgentPid: 90,
+      endedAgentStartedAt: '200',
+    })
+  })
+
+  test.each([false, true])('a clockless Hermes post cannot replace a clocked generation (fallen=%s)', async (fallen) => {
+    const processes = tree([[90, 10, 'python3'], [91, 10, 'python3']])
+    const { tracker } = makeTracker(processes, { alive: () => false })
+    await tracker.notePost(T, 'hermes', 90, '100')
+    if (fallen) {
+      expect(tracker.presenceFor(T, tree([]))).toEqual({
+        agentId: null,
+        agentPresent: false,
+        endedAgentPid: 90,
+        endedAgentStartedAt: '100',
+      })
+    }
+
+    await tracker.notePost(T, 'hermes', 91)
+    expect(tracker.presenceFor(T, processes)).toEqual(fallen
+      ? { agentId: null, agentPresent: false }
+      : { agentId: 'hermes', agentPresent: true })
+    // Inspect the falling identity too: both candidates have the same agent id.
+    expect(tracker.presenceFor(T, tree([]))).toEqual(fallen
+      ? { agentId: null, agentPresent: false }
+      : { agentId: null, agentPresent: false, endedAgentPid: 90, endedAgentStartedAt: '100' })
+  })
+
+  test('an equal Hermes clock cannot transfer the registration to a different pid', async () => {
+    const processes = tree([[90, 10, 'python3'], [91, 10, 'python3']])
+    let alive = true
+    const { tracker } = makeTracker(processes, { alive: () => alive })
+    await tracker.notePost(T, 'hermes', 90, '100')
+    await tracker.notePost(T, 'hermes', 91, '100')
+
+    alive = false
+    expect(tracker.presenceFor(T, tree([]))).toEqual({
+      agentId: null,
+      agentPresent: false,
+      endedAgentPid: 90,
+      endedAgentStartedAt: '100',
+    })
+  })
+
   test('a slower old Hermes lookup cannot overwrite a newer generation', async () => {
     const oldTree = tree([[90, 10, 'python3']])
     const newTree = tree([[91, 10, 'python3']])
@@ -175,6 +231,42 @@ describe('notePost → presenceFor', () => {
     await tracker.notePost(T, 'claude-code', 41)
     tracker.drop(T)
     expect(tracker.presenceFor(T, TMUX_TREE).agentPresent).toBe(false)
+  })
+
+  test.each([
+    ['hermes', false],
+    ['hermes', true],
+    ['claude-code', false],
+    ['claude-code', true],
+  ] as const)('a pending %s snapshot cannot register after drop (reuse=%s)', async (agentId, reuse) => {
+    const oldTree = tree([[90, 10, agentId === 'hermes' ? 'python3' : 'claude']])
+    const newTree = tree([[91, 10, agentId === 'hermes' ? 'python3' : 'claude']])
+    let resolveOld!: (value: ProcTree) => void
+    const oldSnapshot = new Promise<ProcTree>((resolve) => { resolveOld = resolve })
+    const snapshot = vi.fn()
+      .mockReturnValueOnce(oldSnapshot)
+      .mockResolvedValueOnce(newTree)
+    const tracker = createAgentPresenceTracker({ snapshot, isAlive: () => false })
+
+    const oldPost = tracker.notePost(T, agentId, 90, '200')
+    expect(snapshot).toHaveBeenCalledTimes(1)
+    tracker.drop(T)
+    if (reuse) {
+      // A reused terminal has its own clock history. The old lifetime's
+      // higher clock must neither block this post nor win when it resolves.
+      await tracker.notePost(T, agentId, 91, '100')
+      expect(tracker.presenceFor(T, newTree)).toEqual({ agentId, agentPresent: true })
+    }
+
+    resolveOld(oldTree)
+    await oldPost
+    const both = tree([[90, 10, agentId === 'hermes' ? 'python3' : 'claude'], [91, 10, agentId === 'hermes' ? 'python3' : 'claude']])
+    expect(tracker.presenceFor(T, both)).toEqual(reuse
+      ? { agentId, agentPresent: true }
+      : { agentId: null, agentPresent: false })
+    expect(tracker.presenceFor(T, tree([]))).toEqual(reuse
+      ? { agentId: null, agentPresent: false, endedAgentPid: 91, ...(agentId === 'hermes' ? { endedAgentStartedAt: '100' } : {}) }
+      : { agentId: null, agentPresent: false })
   })
 
   test('registrations are per terminal', async () => {

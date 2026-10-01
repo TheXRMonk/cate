@@ -549,6 +549,35 @@ describe('kiro spec', () => {
   })
 })
 
+describe('Hermes correlated wait protocol', () => {
+  const base = { session_id: 's', turn_id: 't', platform: 'cli' }
+  test('normalizes only complete correlated waits', () => {
+    for (const waiting_reason of ['approval', 'question']) {
+      expect(norm('hermes', { ...base, hook_event_name: 'cate_wait_started', waiting_reason }))
+        .toMatchObject({ kind: 'wait-start', sessionId: 's', turnId: 't', waitingReason: waiting_reason })
+    }
+    expect(norm('hermes', { ...base, hook_event_name: 'cate_wait_resolved' }))
+      .toMatchObject({ kind: 'wait-resolved', sessionId: 's', turnId: 't' })
+    for (const patch of [{ session_id: null }, { turn_id: '' }, { waiting_reason: 'other' }]) {
+      expect(norm('hermes', { ...base, hook_event_name: 'cate_wait_started', waiting_reason: 'question', ...patch })).toBeNull()
+    }
+  })
+  test('marked raw approval and tool events do not resume or replace waits; tools remain available', () => {
+    for (const hook_event_name of ['pre_approval_request', 'post_approval_response', 'post_tool_call']) {
+      expect(norm('hermes', { ...base, hook_event_name, cate_wait_protocol: 1 })).toBeNull()
+    }
+    expect(AGENT_HOOK_SPECS.hermes.toolCall({ ...base, hook_event_name: 'post_tool_call', cate_wait_protocol: 1, tool_name: 'write_file', args: {}, result: {} }))
+      .toMatchObject({ name: 'write_file', sessionId: 's' })
+    expect(norm('hermes', { ...base, hook_event_name: 'pre_approval_request' })?.kind).toBe('permission-check')
+    expect(norm('hermes', { ...base, hook_event_name: 'pre_approval_request', surface: 'cli' })?.kind).toBe('permission-wait')
+  })
+  test('normalizes completion, failure and interruption', () => {
+    expect(norm('hermes', { ...base, hook_event_name: 'on_session_end' })).toMatchObject({ waitingReason: 'response-complete' })
+    expect(norm('hermes', { ...base, hook_event_name: 'on_session_end', failed: true })).toMatchObject({ waitingReason: 'error' })
+    expect(norm('hermes', { ...base, hook_event_name: 'on_session_end', interrupted: true })).toMatchObject({ waitingReason: 'interrupted', interrupted: true })
+  })
+})
+
 describe('hermes spec', () => {
   const base = { session_id: 'session-1', turn_id: 'turn-1', profile: 'work', cwd: '/repo', platform: 'cli' }
 

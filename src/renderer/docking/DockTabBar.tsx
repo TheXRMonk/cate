@@ -301,7 +301,7 @@ export function DockTabBar(props: DockTabBarProps) {
             )}
             <PanelInteractionDot panelId={panelId} />
             {agentInfoByPanel[panelId]?.state === 'waitingForInput' && (
-              <AwaitingIndicator />
+              <AwaitingIndicator waitingReason={agentInfoByPanel[panelId]?.waitingReason} />
             )}
             {onClosePanel && (
               <Tooltip label="Close panel" action={isActive ? 'closePanel' : undefined}>

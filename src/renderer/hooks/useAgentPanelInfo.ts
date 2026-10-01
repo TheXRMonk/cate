@@ -11,11 +11,12 @@ import { useStatusStore, type StatusStore } from '../stores/statusStore'
 import { terminalRegistry } from '../lib/terminal/terminalRegistry'
 import { getAgentLogoById } from '../lib/agent/agentLogos'
 import { terminalAgent } from '../lib/agent/terminalAgent'
-import type { AgentState } from '../../shared/types'
+import type { AgentState, AgentWaitingReason } from '../../shared/types'
 import { AGENTS, agentIdForT3Provider, matchAgentDef, type AgentId } from '../../shared/agents'
 
 export interface AgentPanelInfo {
   state: AgentState | undefined
+  waitingReason?: AgentWaitingReason
   /** Agent display name, or null once the process has exited. */
   name: string | null
   /** Logo asset URL for `name`, or null when unknown / no agent. */
@@ -44,6 +45,7 @@ export function selectAgentInfoByPanel(
     const agent = terminalAgent(terminal)
     out[resolvePanelId(key)] = {
       state: terminal.agentState,
+      waitingReason: terminal.waitingReason,
       name: agent?.displayName ?? null,
       logo: getAgentLogoById(agent?.id),
     }
@@ -60,7 +62,7 @@ function agentInfoMapEqual(
   for (const k of keys) {
     const x = a[k]
     const y = b[k]
-    if (!y || x.state !== y.state || x.name !== y.name || x.logo !== y.logo) return false
+    if (!y || x.state !== y.state || x.waitingReason !== y.waitingReason || x.name !== y.name || x.logo !== y.logo) return false
   }
   return true
 }

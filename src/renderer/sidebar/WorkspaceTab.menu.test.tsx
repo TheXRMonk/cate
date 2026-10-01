@@ -145,6 +145,15 @@ async function rightClick(el: HTMLElement): Promise<void> {
   })
 }
 
+it('renders local and detached waiting reasons in the workspace tree', async () => {
+  const ws = seed(makeWorkspace([panel('local', 'terminal')]))
+  useStatusStore.getState().setAgentState(WS, 'local', 'waitingForInput', 'approval')
+  useWindowPanelStore.setState({ panels: [detached('remote', 'terminal', { agentState: 'waitingForInput', waitingReason: 'question' })] })
+  await renderTab(ws)
+  expect(host.querySelector('[aria-label="Awaiting approval"]')).not.toBeNull()
+  expect(host.querySelector('[aria-label="Awaiting answer"]')).not.toBeNull()
+})
+
 function lastMenuItems(): NativeContextMenuItem[] {
   const calls = showContextMenu.mock.calls
   expect(calls.length).toBeGreaterThan(0)

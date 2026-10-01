@@ -1,10 +1,11 @@
 import { create } from 'zustand'
 import type { AgentId } from '../../shared/agents'
-import type { AgentState, TerminalActivity } from '../../shared/types'
+import type { AgentState, AgentWaitingReason, TerminalActivity } from '../../shared/types'
 
 export interface TerminalRuntimeStatus {
   activity: TerminalActivity
   agentState: AgentState
+  waitingReason?: AgentWaitingReason
   /** The hook-registered agent CLI. Kept after the agent exits so the
    *  finished state can still name it; gate on `agentPresent` for liveness. */
   agentId: AgentId | null
@@ -34,7 +35,7 @@ export function workspaceIdForTerminal(ptyId: string): string | undefined {
 
 interface StatusStoreActions {
   setTerminalActivity: (workspaceId: string, terminalId: string, activity: TerminalActivity) => void
-  setAgentState: (workspaceId: string, terminalId: string, state: AgentState) => void
+  setAgentState: (workspaceId: string, terminalId: string, state: AgentState, waitingReason?: AgentWaitingReason) => void
   setAgentId: (workspaceId: string, terminalId: string, agentId: AgentId | null) => void
   setAgentPresent: (workspaceId: string, terminalId: string, present: boolean) => void
   ensureWorkspace: (workspaceId: string) => void
@@ -95,9 +96,9 @@ export const useStatusStore = create<StatusStore>((set, get) => ({
     })
   },
 
-  setAgentState(workspaceId, terminalId, agentState) {
+  setAgentState(workspaceId, terminalId, agentState, waitingReason) {
     set((state) => ({
-      workspaces: patchTerminal(state.workspaces, workspaceId, terminalId, { agentState }),
+      workspaces: patchTerminal(state.workspaces, workspaceId, terminalId, { agentState, waitingReason: agentState === 'waitingForInput' ? waitingReason : undefined }),
     }))
   },
 

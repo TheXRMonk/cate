@@ -44,6 +44,28 @@ function panel(id: string, type: PanelState['type'], worktreeId?: string): Panel
 const tick = () => new Promise((r) => setTimeout(r, 50))
 
 describe('windowPanelSync — coding-agent status', () => {
+  it('reports reason-only status changes without changing agent identity', async () => {
+    vi.useFakeTimers()
+    const reportWindowPanels = vi.fn(async (_report: WindowPanelReport[]) => {})
+    ;(window as any).electronAPI = { reportWindowPanels }
+    useAppStore.setState({ workspaces: [{ id: 'ws-reason', worktrees: [], panels: { waiting: panel('waiting', 'terminal') } } as any] })
+    const status = useStatusStore.getState()
+    status.setAgentId('ws-reason', 'waiting', 'hermes')
+    status.setAgentPresent('ws-reason', 'waiting', true)
+    status.setAgentState('ws-reason', 'waiting', 'waitingForInput', 'approval')
+    const stop = setupWindowPanelSync()
+    try {
+      expect(reportWindowPanels.mock.lastCall?.[0][0]).toMatchObject({ waitingReason: 'approval', agentId: 'hermes' })
+      reportWindowPanels.mockClear()
+      status.setAgentState('ws-reason', 'waiting', 'waitingForInput', 'question')
+      await vi.advanceTimersByTimeAsync(250)
+      expect(reportWindowPanels).toHaveBeenCalledTimes(1)
+      expect(reportWindowPanels.mock.lastCall?.[0][0].waitingReason).toBe('question')
+    } finally {
+      stop()
+      vi.useRealTimers()
+    }
+  })
   it('does not mark a coding-agent run failed when the terminal has no failure', async () => {
     const reports: WindowPanelReport[][] = []
     ;(window as any).electronAPI = {

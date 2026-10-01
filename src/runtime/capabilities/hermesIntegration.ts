@@ -24,6 +24,7 @@ provides_hooks:
   - on_session_finalize
   - pre_approval_request
   - post_approval_response
+  - pre_tool_call
   - post_tool_call
 `
 
@@ -34,6 +35,7 @@ import json
 import os
 import re
 import time
+import threading
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -47,7 +49,7 @@ _OPENER = build_opener(ProxyHandler({}), _RejectRedirects())
 _COMMON_KEYS = {
     "session_id", "task_id", "turn_id", "api_request_id", "platform",
     "completed", "failed", "interrupted", "turn_exit_reason", "reason",
-    "old_session_id", "new_session_id",
+    "old_session_id", "new_session_id", "waiting_reason", "cate_wait_protocol",
 }
 _TOOL_KEYS = {
     "tool_name", "args", "result", "tool_call_id", "duration_ms", "status",
@@ -118,12 +120,67 @@ def _callback(name, profile):
 
 def register(ctx):
     profile = str(getattr(ctx, "profile_name", "default"))
+    lock = threading.RLock()
+    session = None
+    turn = None
+    pending = set()
+    retired_turns = set()
+
+    def dispatch(name, **kwargs):
+        nonlocal session, turn
+        if kwargs.get("platform") not in {None, "", "cli", "tui"}:
+            return None
+        with lock:
+            sid, tid = kwargs.get("session_id"), kwargs.get("turn_id")
+            if name == "pre_llm_call" and (sid, tid) in retired_turns:
+                return None
+            if name == "pre_llm_call" and kwargs.get("platform") in {"cli", "tui"}:
+                if (session, turn) != (sid, tid):
+                    if session and turn:
+                        retired_turns.add((session, turn))
+                    pending.clear()
+                session, turn = sid, tid
+            if name in {"on_session_end", "on_session_finalize"}:
+                if session and (sid != session or (tid and tid != turn)):
+                    return None
+                if session and turn:
+                    retired_turns.add((session, turn))
+                pending.clear()
+                turn = None
+            if name in {"on_session_start", "on_session_reset"} and sid != session:
+                if session and turn:
+                    retired_turns.add((session, turn))
+                session, turn = sid, None
+                pending.clear()
+            before = set(pending)
+            if session and turn and (sid, tid) == (session, turn):
+                tool = kwargs.get("tool_call_id")
+                if isinstance(tool, str) and tool:
+                    if name == "pre_tool_call" and kwargs.get("tool_name") == "clarify":
+                        pending.add((tool, "question"))
+                    elif name == "pre_approval_request" and kwargs.get("surface") == "cli":
+                        pending.add((tool, "approval"))
+                    elif name == "post_approval_response" and kwargs.get("surface") == "cli":
+                        pending.discard((tool, "approval"))
+                    elif name == "post_tool_call":
+                        pending.difference_update({item for item in pending if item[0] == tool})
+            if before != pending:
+                reason = "approval" if any(kind == "approval" for _, kind in pending) else "question"
+                _report("cate_wait_started" if pending else "cate_wait_resolved", profile,
+                        session_id=session, turn_id=turn, platform="cli",
+                        waiting_reason=reason if pending else None)
+            # Keep context and edit evidence, but let correlated wait events
+            # alone resume the new protocol; legacy bridges remain compatible.
+            if name != "pre_tool_call":
+                return _report(name, profile, **dict(kwargs, cate_wait_protocol=1))
+            return None
+
     for name in (
         "on_session_start", "on_session_reset", "pre_llm_call",
         "on_session_end", "on_session_finalize", "pre_approval_request",
-        "post_approval_response", "post_tool_call",
+        "post_approval_response", "pre_tool_call", "post_tool_call",
     ):
-        ctx.register_hook(name, _callback(name, profile))
+        ctx.register_hook(name, lambda _name=name, **kw: dispatch(_name, **kw))
     # Hermes fires no lifecycle hook until the first prompt. Hermes loads this
     # plugin at launch, so announce the open terminal agent now.
     _report("cate_open", profile)

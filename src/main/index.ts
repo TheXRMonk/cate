@@ -48,6 +48,11 @@ import { setMainWindowReady, flushPendingOpenPaths, registerOpenFileHandler } fr
 import { registerOpenUrlHandler } from './lifecycle/openUrl'
 import { fireStartupTelemetry, registerTelemetryNoticeHandler } from './lifecycle/telemetry'
 import { registerLifecycleHandlers } from './lifecycle/shutdown'
+import { createSmokeExit } from './lifecycle/smokeExit'
+import { flushAllLoggers } from './ipc/terminal'
+import { releaseAllProjectLocks } from './projectLock'
+import { t3HarnessManager } from './t3Agent/T3HarnessManager'
+import { workspaceCateApi } from './cateApi/workspaceCateApi'
 import { registerPullRequestHandlers } from './ipc/pullRequests'
 import { registerT3AgentHandlers } from './ipc/t3Agent'
 
@@ -55,6 +60,7 @@ import { registerT3AgentHandlers } from './ipc/t3Agent'
 // wait below is part of the smoke-only branch in mainWin.once('ready-to-show')
 // and never executes on normal launches. Do not re-introduce it on the hot path.
 async function runSmokeAssertions(win: BrowserWindow): Promise<void> {
+  // Assertions run before smoke-only resource disposal.
   const result = await win.webContents.executeJavaScript(`
     new Promise((resolve) => {
       setTimeout(() => {
@@ -66,6 +72,7 @@ async function runSmokeAssertions(win: BrowserWindow): Promise<void> {
     })
   `, true) as { hasElectronAPI?: boolean; hasFullscreenCheck?: boolean }
 
+  log.info('[smoke] renderer assertions completed')
   if (!result?.hasElectronAPI || !result?.hasFullscreenCheck) {
     throw new Error('Smoke test failed: preload bridge did not initialize correctly')
   }
@@ -401,11 +408,23 @@ app.whenReady().then(async () => {
     // before app_start, so the upgrade path lands in analytics in order.
     fireStartupTelemetry(mainWin)
     if (process.env.CATE_SMOKE_TEST === '1') {
+      const finishSmoke = createSmokeExit({
+        cleanup: async () => {
+          flushAllLoggers()
+          workspaceCateApi.disposeAll()
+          await Promise.all([t3HarnessManager.disposeAll(), runtimes.disposeAll()])
+          releaseAllProjectLocks()
+        },
+        exit: (code) => {
+          log.info('[smoke] cleanup finished; exiting %d', code)
+          ;(process as unknown as { reallyExit(code: number): never }).reallyExit(code)
+        },
+      })
       runSmokeAssertions(mainWin)
-        .then(() => app.exit(0))
+        .then(() => finishSmoke(0))
         .catch((err) => {
           log.error('[smoke] %O', err)
-          app.exit(1)
+          void finishSmoke(1)
         })
     }
   }

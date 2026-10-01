@@ -302,8 +302,12 @@ export function registerHandlers(): void {
   // Renderer reports screen-derived agent state; rebroadcast so every
   // window's sidebar gets it (the sidebar in the main window won't otherwise
   // see state for terminals that live in a detached panel window).
-  ipcMain.on(SHELL_AGENT_SCREEN_STATE, (_event, terminalId: string, state: string) => {
-    broadcastToAll(SHELL_AGENT_SCREEN_STATE, terminalId, state)
+  ipcMain.on(SHELL_AGENT_SCREEN_STATE, (_event, terminalId: unknown, state: unknown, waitingReason: unknown) => {
+    if (typeof terminalId !== 'string' || !terminalId ||
+        typeof state !== 'string' || !['notRunning', 'running', 'waitingForInput', 'finished'].includes(state)) return
+    if (waitingReason !== undefined && (typeof waitingReason !== 'string' ||
+        !['approval', 'question', 'response-complete', 'interrupted', 'error'].includes(waitingReason))) return
+    broadcastToAll(SHELL_AGENT_SCREEN_STATE, terminalId, state, state === 'waitingForInput' ? waitingReason : undefined)
   })
 
 }

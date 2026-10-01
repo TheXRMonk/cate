@@ -20,7 +20,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { LocalSubprocessTransport } from './localTransport'
+import { LocalSubprocessTransport, runtimeTarExecutable } from './localTransport'
 import type { RuntimeTarget } from '../runtimeArtifacts'
 import { RUNTIME_VERSION } from '../../../runtime/version'
 
@@ -30,6 +30,15 @@ const nodeName = process.platform === 'win32' ? 'node.exe' : 'node'
 
 // Every test shells out to real tar, which is slow on Windows runners.
 vi.setConfig({ testTimeout: 30_000 })
+
+test('Windows runtime extraction uses System32 bsdtar instead of inherited Git tar', () => {
+  expect(runtimeTarExecutable('win32', { SystemRoot: 'D:\\Windows' })).toBe(
+    path.join('D:\\Windows', 'System32', 'tar.exe'),
+  )
+  expect(runtimeTarExecutable('win32', {})).toBe(path.join('C:\\Windows', 'System32', 'tar.exe'))
+  expect(runtimeTarExecutable('linux', {})).toBe('tar')
+  expect(runtimeTarExecutable('darwin', {})).toBe('tar')
+})
 
 let root: string
 
@@ -48,7 +57,7 @@ async function makeTarball(name: string, body: string): Promise<string> {
   await fs.writeFile(path.join(stage, 'runtime', 'bin', nodeName), body)
   await fs.writeFile(path.join(stage, 'runtime.cjs'), body)
   const tgz = path.join(root, `${name}.tgz`)
-  await execFileP('tar', ['-czf', tgz, '-C', stage, '.'])
+  await execFileP(runtimeTarExecutable(), ['-czf', tgz, '-C', stage, '.'])
   return tgz
 }
 

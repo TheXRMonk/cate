@@ -4,7 +4,7 @@ import type { KeepAwakeState } from './keepAwake'
 // Type declaration for window.electronAPI exposed via contextBridge
 // =============================================================================
 
-import type { AppSettings, AgentState, DockWindowInitPayload, DockWindowSyncState, DetachedDockWindowSnapshot, WindowPanelInfo, WindowPanelReport, FileSearchOptions, FileSearchResult, FileTreeNode, GitComparisonResult, GitComparisonSpec, GitFileContent, GitFileDiff, ReviewPanelOpenRequest, SearchOptions, SearchResultBatch, SearchDoneEvent, NotificationAction, PanelTransferSnapshot, PerfSnapshot, Point, SidebarSession, TerminalActivity, TerminalAgentSession, WorkspaceInfo, WorkspaceMutationResult, RemoteConnectSpec, RuntimeConnectResult, RuntimeStatusEvent, RuntimeConnection, RuntimePhase, RemoteProjectEntry, SshHostEntry, UIState } from './types'
+import type { AppSettings, AgentState, AgentWaitingReason, DockWindowInitPayload, DockWindowSyncState, DetachedDockWindowSnapshot, WindowPanelInfo, WindowPanelReport, FileSearchOptions, FileSearchResult, FileTreeNode, GitComparisonResult, GitComparisonSpec, GitFileContent, GitFileDiff, ReviewPanelOpenRequest, SearchOptions, SearchResultBatch, SearchDoneEvent, NotificationAction, PanelTransferSnapshot, PerfSnapshot, Point, SidebarSession, TerminalActivity, TerminalAgentSession, WorkspaceInfo, WorkspaceMutationResult, RemoteConnectSpec, RuntimeConnectResult, RuntimeStatusEvent, RuntimeConnection, RuntimePhase, RemoteProjectEntry, SshHostEntry, UIState } from './types'
 import type { CodingAgentLaunch } from './codingAgentRuns'
 import type { SavedSkill, InstalledSkill, SkillEntry, SkillSource, SkillTargetId } from './skills'
 import type { AgentHookEvent, AgentHookAgentState } from './agentHooks'
@@ -418,11 +418,11 @@ export interface ElectronAPI {
    * the xterm instance reads its buffer to detect prompt vs. working, and
    * pushes the result here so other windows' sidebars can mirror it.
    */
-  shellReportAgentScreenState(terminalId: string, state: AgentState): void
+  shellReportAgentScreenState(terminalId: string, state: AgentState, waitingReason?: AgentWaitingReason): void
 
   /** Subscribe to screen-state broadcasts from main (originating in any window). */
   onAgentScreenStateUpdate(
-    callback: (terminalId: string, state: AgentState) => void,
+    callback: (terminalId: string, state: AgentState, waitingReason?: AgentWaitingReason) => void,
   ): () => void
 
   /** Subscribe to git branch updates (main -> renderer). */

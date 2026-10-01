@@ -47,6 +47,10 @@ function panelInfo(windowId: number, ownerWindowType: WindowPanelInfo['ownerWind
     parentCanvasId: p.parentCanvasId,
     worktreeId: p.worktreeId,
     agentState: p.agentState,
+    waitingReason: p.agentState === 'waitingForInput'
+      && (p.waitingReason === 'approval' || p.waitingReason === 'question'
+        || p.waitingReason === 'response-complete' || p.waitingReason === 'interrupted'
+        || p.waitingReason === 'error') ? p.waitingReason : undefined,
     agentCanReceivePrompt: p.agentCanReceivePrompt,
     agentId: p.agentId,
     agentName: p.agentName,
@@ -132,7 +136,7 @@ let lastWindowPanelSignature = ''
 export function broadcastWindowPanels(): void {
   const panels = getWindowPanels()
   const signature = panels
-    .map((p) => `${p.ownerWindowId}:${p.panelId}:${p.type}:${p.title}:${p.workspaceId}:${p.filePath ?? ''}:${p.url ?? ''}:${p.reviewRepoPath ?? ''}:${p.focused ? 1 : 0}:${p.parentCanvasId ?? ''}:${p.worktreeId ?? ''}:${p.agentState ?? ''}:${p.agentCanReceivePrompt ? 1 : 0}:${p.agentId ?? ''}:${p.agentName ?? ''}:${JSON.stringify(p.agentSession ?? null)}:${p.hasPorts ? 1 : 0}:${p.codingAgentRunId ?? ''}:${p.codingAgentOwnerPanelId ?? ''}:${p.codingAgentStatus ?? ''}`)
+    .map((p) => `${p.ownerWindowId}:${p.panelId}:${p.type}:${p.title}:${p.workspaceId}:${p.filePath ?? ''}:${p.url ?? ''}:${p.reviewRepoPath ?? ''}:${p.focused ? 1 : 0}:${p.parentCanvasId ?? ''}:${p.worktreeId ?? ''}:${p.agentState ?? ''}:${p.waitingReason ?? ''}:${p.agentCanReceivePrompt ? 1 : 0}:${p.agentId ?? ''}:${p.agentName ?? ''}:${JSON.stringify(p.agentSession ?? null)}:${p.hasPorts ? 1 : 0}:${p.codingAgentRunId ?? ''}:${p.codingAgentOwnerPanelId ?? ''}:${p.codingAgentStatus ?? ''}`)
     .sort()
     .join('|')
   if (signature === lastWindowPanelSignature) return

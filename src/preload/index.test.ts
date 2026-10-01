@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ElectronAPI } from '../shared/electron-api'
 import {
+  SHELL_AGENT_SCREEN_STATE,
   DIALOG_SAVE_FILE,
   DIALOG_TERMINAL_LINK_OPEN,
   KEEP_AWAKE_TOGGLE,
@@ -66,6 +67,15 @@ beforeEach(() => {
 })
 
 describe('electronAPI preload bridge', () => {
+  it('forwards waiting reasons in both screen-state directions', () => {
+    api.shellReportAgentScreenState('pty', 'waitingForInput', 'approval')
+    expect(electron.send).toHaveBeenCalledWith(SHELL_AGENT_SCREEN_STATE, 'pty', 'waitingForInput', 'approval')
+    const listener = vi.fn()
+    const off = api.onAgentScreenStateUpdate(listener)
+    emit(SHELL_AGENT_SCREEN_STATE, 'pty', 'waitingForInput', 'question')
+    expect(listener).toHaveBeenCalledWith('pty', 'waitingForInput', 'question')
+    off()
+  })
   it('exposes the keep-awake toggle and returns its IPC result', async () => {
     electron.invoke.mockResolvedValueOnce({ enabled: true, endsAt: null }).mockResolvedValueOnce({ enabled: false, endsAt: null })
 

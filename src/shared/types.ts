@@ -478,6 +478,7 @@ export interface WindowPanelReport {
    *  overview can render a detached row's running shimmer / awaiting indicator
    *  exactly like a local row. */
   agentState?: AgentState
+  waitingReason?: AgentWaitingReason
   /** True only when the surface is at its normal prompt, not an approval or
    * structured-input interruption that also appears as waitingForInput. */
   agentCanReceivePrompt?: boolean
@@ -1031,6 +1032,8 @@ export type NodeActivityState =
   | { type: 'normal' }
   | { type: 'commandFinished'; exitCode: number }
   | { type: 'agentWaitingForInput' }
+
+export type AgentWaitingReason = 'approval' | 'question' | 'response-complete' | 'interrupted' | 'error'
 
 export type AgentState = 'notRunning' | 'running' | 'waitingForInput' | 'finished'
 

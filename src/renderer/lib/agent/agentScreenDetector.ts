@@ -33,7 +33,7 @@ import { useStatusStore, workspaceIdForTerminal } from '../../stores/statusStore
 import { notifyAgentNeedsAttention } from './agentNotifications'
 import type { AgentHookEvent } from '../../../shared/agentHooks'
 import { AGENTS } from '../../../shared/agents'
-import type { AgentState } from '../../../shared/types'
+import type { AgentState, AgentWaitingReason } from '../../../shared/types'
 import type { AgentApprovalMode } from '../../../shared/agentApprovalModes'
 
 export interface DetectorSignals {
@@ -86,6 +86,10 @@ interface Tracker {
   /** Reject late lifecycle events from the last completed turn. */
   endedTurnId: string | null
   state: AgentState
+  waitingReason?: AgentWaitingReason
+  committedReason?: AgentWaitingReason
+  retiredTurns?: Set<string>
+  correlatedWait?: boolean
 }
 
 const trackers = new Map<string, Tracker>()
@@ -125,21 +129,26 @@ function workspaceFor(terminalId: string): string | undefined {
  *  resume cannot re-notify. */
 function commit(terminalId: string, state: AgentState, notify: boolean, permissionBody?: string): void {
   const t = trackers.get(terminalId)
-  if (!t || t.state === state) return
+  if (!t) return
+  const waitingReason = state === 'waitingForInput' ? t.waitingReason : undefined
+  const stateChanged = t.state !== state
+  if (!stateChanged && t.committedReason === waitingReason) return
   const workspaceId = workspaceFor(terminalId)
   if (!workspaceId) return
 
   t.state = state
+  t.committedReason = waitingReason
   const status = useStatusStore.getState()
   const agentId = status.workspaces[workspaceId]?.terminals[terminalId]?.agentId ?? null
-  status.setAgentState(workspaceId, terminalId, state)
-  window.electronAPI?.shellReportAgentScreenState?.(terminalId, state)
+  status.setAgentState(workspaceId, terminalId, state, waitingReason)
+  window.electronAPI?.shellReportAgentScreenState?.(terminalId, state, waitingReason)
 
-  if (notify && state === 'waitingForInput') {
+  if (notify && stateChanged && state === 'waitingForInput') {
     notifyAgentNeedsAttention({
       agentName: AGENTS.find((agent) => agent.id === agentId)?.displayName ?? null,
       action: { type: 'focusTerminal', workspaceId, terminalId },
       permission: permissionBody,
+      waitingReason,
     })
   }
 }
@@ -173,6 +182,21 @@ function recompute(terminalId: string, notifyOnIdle = false, permissionBody?: st
 /** A normalized agent-hook event arrived for a terminal this window owns. */
 export function noteAgentHookEvent(event: AgentHookEvent): void {
   const t = trackerFor(event.terminalId)
+  if (event.kind === 'turn-start' && event.turnId
+    && t.retiredTurns?.has(JSON.stringify([event.agentId, event.sessionId, event.turnId]))) return
+  if (t.activeTurnId && (event.kind === 'turn-end' || event.kind === 'session-end'
+    || (event.kind === 'turn-start' && (event.turnId !== t.activeTurnId || event.sessionId !== t.sessionId)))) {
+    if (event.kind === 'turn-start' || (event.agentId === t.agentId && event.sessionId === t.sessionId
+      && (!event.turnId || event.turnId === t.activeTurnId))) {
+      t.retiredTurns ??= new Set()
+      t.retiredTurns.add(JSON.stringify([t.agentId, t.sessionId, t.activeTurnId]))
+    }
+  }
+  if (event.kind === 'wait-start' || event.kind === 'wait-resolved') {
+    if (!t.hookTurnActive || !event.sessionId || !event.turnId
+      || t.agentId !== event.agentId || t.sessionId !== event.sessionId || t.activeTurnId !== event.turnId) return
+    if (event.kind === 'wait-start' && event.waitingReason !== 'approval' && event.waitingReason !== 'question') return
+  }
   // Metadata and delayed child/previous-session hooks cannot end or block the
   // current turn. Session/turn starts are the explicit identity boundaries.
   if (!['session-start', 'turn-start', 'session-title'].includes(event.kind)) {
@@ -190,19 +214,31 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       noteAgentInputSubmitted(event.terminalId)
       break
     case 'turn-start':
+      if (t.hookTurnActive && t.correlatedWait && t.sessionId === event.sessionId && t.activeTurnId === event.turnId) break
       t.sessionId = event.sessionId
       t.activeTurnId = event.turnId ?? null
       t.endedTurnId = null
       t.hookTurnActive = true
       t.permission = null
+      t.waitingReason = undefined
+      t.correlatedWait = false
       recompute(event.terminalId)
       break
+    case 'wait-start':
+      t.correlatedWait = true
+      t.permission = 'waiting'
+      t.waitingReason = event.waitingReason
+      recompute(event.terminalId, true, event.waitingReason === 'approval' ? permissionBodyFor(event) : undefined)
+      break
+    case 'wait-resolved':
     case 'turn-resume':
       // A permission reply arrived or a tool completed — either way the turn
       // is in flight. Idempotent and silent.
       t.hookTurnActive = true
       t.activeTurnId ??= event.turnId ?? null
       t.permission = null
+      t.waitingReason = undefined
+      t.correlatedWait = false
       recompute(event.terminalId)
       break
     case 'turn-end':
@@ -212,8 +248,11 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       t.activeTurnId = null
       t.hookTurnActive = false
       t.permission = null
+      t.waitingReason = undefined
+      t.correlatedWait = false
       // A turn-end the runtime recovered from a user interrupt is silent: the
       // user is already at the terminal.
+      t.waitingReason = event.interrupted ? 'interrupted' : event.waitingReason ?? 'response-complete'
       recompute(event.terminalId, !event.interrupted)
       break
     case 'session-end':
@@ -222,6 +261,8 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       t.activeTurnId = null
       t.hookTurnActive = false
       t.permission = null
+      t.waitingReason = undefined
+      t.correlatedWait = false
       recompute(event.terminalId)
       break
     case 'session-start':
@@ -237,6 +278,8 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       t.activeTurnId = null
       t.hookTurnActive = false
       t.permission = null
+      t.waitingReason = undefined
+      t.correlatedWait = false
       recompute(event.terminalId)
       break
     case 'permission-check':
@@ -247,6 +290,7 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       t.activeTurnId ??= event.turnId ?? null
       if (t.permission !== 'waiting') t.permission = 'checking'
       t.approvalMode = event.approvalMode
+      if (t.permission !== 'waiting') t.waitingReason = event.agentId === 'codex' && event.approvalMode === 'manual' ? 'approval' : undefined
       recompute(event.terminalId, true, permissionBodyFor(event))
       break
     case 'permission-wait':
@@ -258,6 +302,7 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
       t.hookTurnActive = true
       t.activeTurnId ??= event.turnId ?? null
       t.permission = 'waiting'
+      t.waitingReason = 'approval'
       recompute(event.terminalId, true, permissionBodyFor(event))
       break
   }
@@ -270,9 +315,11 @@ export function noteAgentHookEvent(event: AgentHookEvent): void {
  *  resumes the agent while it processes that answer, before its Stop. */
 export function noteAgentInputSubmitted(terminalId: string): void {
   const t = trackers.get(terminalId)
-  if (!t?.permission) return
+  if (!t?.permission || t.correlatedWait) return
   t.hookTurnActive = true
   t.permission = null
+  t.waitingReason = undefined
+  t.correlatedWait = false
   recompute(terminalId)
 }
 
@@ -302,6 +349,8 @@ export function noteAgentPresence(terminalId: string, present: boolean, processO
     t.agentId = null
     t.hookTurnActive = false
     t.permission = null
+    t.waitingReason = undefined
+    t.correlatedWait = false
   }
   recompute(terminalId)
 }
@@ -320,9 +369,9 @@ export function stopAgentScreenDetector(): void {
   trackers.clear()
 }
 
-export function applyRemoteAgentScreenState(terminalId: string, state: AgentState): void {
+export function applyRemoteAgentScreenState(terminalId: string, state: AgentState, waitingReason?: AgentWaitingReason): void {
   const status = useStatusStore.getState()
   const workspaceId = workspaceIdForTerminal(terminalId)
   if (!workspaceId) return
-  status.setAgentState(workspaceId, terminalId, state)
+  status.setAgentState(workspaceId, terminalId, state, waitingReason)
 }

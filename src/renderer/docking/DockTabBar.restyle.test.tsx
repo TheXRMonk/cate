@@ -21,6 +21,7 @@ vi.mock('../lib/terminal/terminalRegistry', () => ({
 }))
 
 import { DockTabBar } from './DockTabBar'
+import { useStatusStore } from '../stores/statusStore'
 import { useAppStore } from '../stores/appStore'
 import type { DockTabStack, PanelState } from '../../shared/types'
 
@@ -40,6 +41,7 @@ function renderBar(host: HTMLDivElement, onClosePanel?: (id: string) => void) {
     root.render(
       <DockTabBar
         stack={STACK}
+        workspaceId="ws-reason"
         getPanel={(id) => PANELS[id]}
         getPanelTitle={(id) => PANELS[id]?.title ?? id}
         onClosePanel={onClosePanel}
@@ -78,6 +80,14 @@ afterEach(() => {
 })
 
 describe('DockTabBar restyle', () => {
+  it('updates the attention tooltip when only its reason changes', () => {
+    const status = useStatusStore.getState()
+    status.setAgentState('ws-reason', 'p1', 'waitingForInput', 'approval')
+    root = renderBar(host)
+    expect(host.querySelector('.cate-await-indicator')?.getAttribute('title')).toBe('Awaiting approval')
+    act(() => status.setAgentState('ws-reason', 'p1', 'waitingForInput', 'error'))
+    expect(host.querySelector('.cate-await-indicator')?.getAttribute('aria-label')).toBe('Agent error')
+  })
   it('renders each panel as a rounded pill and marks the active one with bg-surface-2', () => {
     root = renderBar(host)
     const pills = host.querySelectorAll<HTMLElement>('[data-tab-panel-id]')

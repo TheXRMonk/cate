@@ -38,7 +38,6 @@ import { setupWindowPanelSync } from '../workspace/windowPanelSync'
 import { useOwnedTerminalTelemetry } from '../../hooks/useProcessMonitor'
 import { terminalRegistry } from '../terminal/terminalRegistry'
 import { workspaceIdForTerminal } from '../../stores/statusStore'
-import type { AgentState } from '../../../shared/types'
 import { AGENTS } from '../../../shared/agents'
 import type { StoreApi } from 'zustand'
 import type { CanvasStore } from '../../stores/canvasStore'
@@ -79,8 +78,8 @@ export function useWindowRuntime(canvasStore?: StoreApi<CanvasStore>): void {
   useEffect(() => {
     startAgentScreenDetector()
     const offRemote = window.electronAPI?.onAgentScreenStateUpdate?.(
-      (terminalId: string, state: AgentState) => {
-        applyRemoteAgentScreenState(terminalId, state)
+      (terminalId, state, waitingReason) => {
+        applyRemoteAgentScreenState(terminalId, state, waitingReason)
       },
     )
     const offHook = window.electronAPI?.onShellAgentHookEvent?.((terminalId, event) => {
