@@ -122,7 +122,7 @@ function registerUpdateIpc(): void {
   ipcMain.handle(UPDATE_GET_STATUS, (): UpdateStatus => lastStatus)
   ipcMain.handle(UPDATE_CHECK, (): void => checkForUpdatesManually())
   ipcMain.handle(UPDATE_QUIT_AND_INSTALL, (): boolean => {
-    if (!updatePendingInstall || !canSelfUpdate()) return false
+    if (!allowUpstreamUpdates || !updatePendingInstall || !canSelfUpdate()) return false
     track('update_restart_clicked', { version: availableVersion })
     // quitAndInstall quits the app, lets Squirrel.Mac swap the bundle while
     // NOTHING is running, then relaunches the new version itself. That avoids
@@ -329,6 +329,12 @@ function evaluateInstallOutcome(): void {
   }
 }
 
+import { allowUpstreamUpdates } from './distributionPolicy'
+
+function reportCustomUpdatesDisabled(): void {
+  pushStatus({ state: 'disabled', version: null, message: 'This custom build is updated manually.' })
+}
+
 export function initAutoUpdater(): void {
   // Dev gate. Normally the updater only runs in a packaged build. The dev
   // harness (CATE_DEV_UPDATE=1, see scripts/dev-update.mjs) opts in so a
@@ -337,6 +343,11 @@ export function initAutoUpdater(): void {
   const devUpdate = !app.isPackaged && process.env.CATE_DEV_UPDATE === '1'
   // Register the modal IPC before the gate so renderer invoke() never rejects.
   registerUpdateIpc()
+  if (!allowUpstreamUpdates) {
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = false
+    return reportCustomUpdatesDisabled()
+  }
   if (!app.isPackaged && !devUpdate) {
     pushStatus({ state: 'disabled', version: null, message: 'Updates are available in installed builds of Cate.' })
     return
@@ -396,6 +407,7 @@ export function initAutoUpdater(): void {
  *  it. Sent off lastStatus directly (not cached) so the flag stays a one-off. */
 export function checkForUpdatesManually(): void {
   manualCheckRequested = true
+  if (!allowUpstreamUpdates) return reportCustomUpdatesDisabled()
   if (!app.isPackaged && process.env.CATE_DEV_UPDATE !== '1') {
     pushStatus({ state: 'disabled', version: null, message: 'Updates are available in installed builds of Cate.' })
     return
@@ -411,6 +423,7 @@ export function checkForUpdatesManually(): void {
 /** React to the beta-updates opt-in flipping (UI toggle or hand-edited
  *  settings.json): re-point the channel and re-check immediately. */
 export function setBetaUpdatesEnabled(enabled: boolean): void {
+  if (!allowUpstreamUpdates) return
   autoUpdater.allowPrerelease = enabled
   log.info('[auto-updater] Beta updates %s', enabled ? 'enabled' : 'disabled')
   if (!app.isPackaged) return

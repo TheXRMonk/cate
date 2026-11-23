@@ -60,6 +60,8 @@ const h = vi.hoisted(() => {
   }
 })
 
+const policy = vi.hoisted(() => ({ allowUpstreamUpdates: true }))
+vi.mock('./distributionPolicy', () => policy)
 vi.mock('electron-updater', () => ({ autoUpdater: h.autoUpdater }))
 vi.mock('electron', () => ({ app: h.app, dialog: h.dialog, shell: h.shell, ipcMain: h.ipcMain }))
 vi.mock('./windowRegistry', () => ({ broadcastToAll: h.broadcastToAll }))
@@ -105,6 +107,27 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
+})
+
+it('keeps upstream updates off for the custom distribution', async () => {
+  const actual = await vi.importActual<typeof import('./distributionPolicy')>('./distributionPolicy')
+  expect(actual.allowUpstreamUpdates).toBe(false)
+  policy.allowUpstreamUpdates = actual.allowUpstreamUpdates
+  try {
+    h.autoUpdater.autoInstallOnAppQuit = h.autoUpdater.autoDownload = true
+    const mod = await loadModule()
+    mod.initAutoUpdater()
+    mod.checkForUpdatesManually()
+    mod.setBetaUpdatesEnabled(true)
+    vi.advanceTimersByTime(60 * 60 * 1000)
+    expect(h.autoUpdater.autoInstallOnAppQuit).toBe(false)
+    expect(h.autoUpdater.autoDownload).toBe(false)
+    expect(h.autoUpdater.checkForUpdatesAndNotify).not.toHaveBeenCalled()
+    expect(h.autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+    expect(h.autoUpdater.listenerCount('update-downloaded')).toBe(0)
+  } finally {
+    policy.allowUpstreamUpdates = true
+  }
 })
 
 describe('initAutoUpdater — config', () => {
