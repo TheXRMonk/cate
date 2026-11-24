@@ -12,9 +12,12 @@ import type { Runtime } from '../runtime/types'
 import type { TerminalAgentSession } from '../../shared/types'
 
 const harness = vi.hoisted(() => ({
+  info: vi.fn(),
   owner: 1 as number | undefined,
   sent: [] as Array<{ channel: string; terminalId: string; session: TerminalAgentSession | null }>,
 }))
+
+vi.mock('../logger', () => ({ default: { info: harness.info } }))
 
 vi.mock('./terminal', () => ({
   getTerminalOwner: () => harness.owner,
@@ -25,7 +28,7 @@ vi.mock('../windowRegistry', () => ({
   },
 }))
 
-import { ingestAgentSessionStamp, clearAgentSessionStamp } from './agentSessionStamps'
+import { ingestAgentSessionStamp, clearAgentSessionStamp, dropAgentSessionStampState } from './agentSessionStamps'
 
 let nextCwd: string | null = '/runtime-cwd'
 let getCwdCalls = 0
@@ -68,6 +71,78 @@ beforeEach(() => {
   getCwdCalls = 0
   pendingCwd = []
   tid = `term-${++n}` // fresh terminal per test — module state is per-terminal
+})
+
+describe('resume diagnostics', () => {
+  it('refreshes diagnostic generation when an unchanged stamp is deduplicated', () => {
+    const event = { ...ev(tid, 'hermes', 'turn-start', 'session-1', '/w'),
+      profile: 'work', sourcePid: 42, sourceStartedAt: '100' }
+    ingestAgentSessionStamp(runtime, event)
+    harness.info.mockClear()
+    ingestAgentSessionStamp(runtime, { ...event, sourcePid: 43, sourceStartedAt: '200' })
+    expect(harness.info).not.toHaveBeenCalled()
+    expect(stamps(tid)).toHaveLength(1)
+    clearAgentSessionStamp(tid, 43, '200')
+    expect(JSON.parse(harness.info.mock.calls[0][1])).toMatchObject({
+      previous: { sessionId: 'session-1', sourcePid: 43, sourceStartedAt: '200' },
+    })
+  })
+  it.each([
+    ['session-end', 'session-1', 'session-end'],
+    ['session-start', 'session-2', 'non-resumable-replacement'],
+  ] as const)('distinguishes %s clears from process exits', (kind, sessionId, reason) => {
+    const base = { profile: 'work', sourcePid: 42, sourceStartedAt: '100' }
+    ingestAgentSessionStamp(runtime, { ...ev(tid, 'hermes', 'turn-start', 'session-1', '/w'), ...base })
+    harness.info.mockClear()
+    ingestAgentSessionStamp(runtime, { ...ev(tid, 'hermes', kind, sessionId, '/w'), ...base })
+    expect(JSON.parse(harness.info.mock.calls[0][1])).toMatchObject({
+      action: 'clear', reason, previous: { sessionId: 'session-1', ...base },
+    })
+  })
+  it('does not log stale clears or unchanged stamps', () => {
+    const event = { ...ev(tid, 'hermes', 'turn-start', 'session-1', '/w'),
+      profile: 'work', sourcePid: 42, sourceStartedAt: '100' }
+    ingestAgentSessionStamp(runtime, event)
+    harness.info.mockClear()
+    ingestAgentSessionStamp(runtime, event)
+    clearAgentSessionStamp(tid, 43, '200')
+    expect(harness.info).not.toHaveBeenCalled()
+    expect(stamps(tid)).toHaveLength(1)
+  })
+  it('logs terminal teardown even after its window owner disappears', () => {
+    ingestAgentSessionStamp(runtime, ev(tid, 'codex', 'turn-start', 'session-1', '/w'))
+    harness.info.mockClear()
+    harness.owner = undefined
+    dropAgentSessionStampState(tid)
+    expect(harness.info).toHaveBeenCalledWith('[session-resume] %s', expect.any(String))
+    expect(JSON.parse(harness.info.mock.calls[0][1])).toMatchObject({
+      action: 'drop', reason: 'terminal-teardown', terminalId: tid,
+      previous: { sessionId: 'session-1' },
+    })
+    dropAgentSessionStampState(tid)
+    expect(harness.info).toHaveBeenCalledTimes(1)
+  })
+  it('records a process-exit clear with the previous identity and generation', () => {
+    const event = { ...ev(tid, 'hermes', 'turn-start', 'session-1', '/private-cwd'),
+      profile: 'work', sourcePid: 42, sourceStartedAt: '100', raw: { token: 'secret' } }
+    harness.info.mockClear()
+    ingestAgentSessionStamp(runtime, event)
+    const stamped = JSON.parse(harness.info.mock.calls[0][1])
+    expect(stamped).toMatchObject({ action: 'stamp', next: {
+      sessionId: 'session-1', profile: 'work', sourcePid: 42, sourceStartedAt: '100',
+    } })
+    expect(JSON.stringify(stamped)).not.toMatch(/secret|private-cwd/)
+    harness.info.mockClear()
+    clearAgentSessionStamp(tid, 42, '100')
+    expect(harness.info).toHaveBeenCalledWith('[session-resume] %s', expect.any(String))
+    const record = JSON.parse(harness.info.mock.calls[0][1])
+    expect(record).toMatchObject({ action: 'clear', reason: 'process-exit', terminalId: tid,
+      previous: { agentId: 'hermes', sessionId: 'session-1', profile: 'work', sourcePid: 42, sourceStartedAt: '100' },
+      trigger: { sourcePid: 42, sourceStartedAt: '100' } })
+    expect(JSON.stringify(record)).not.toMatch(/secret|private-cwd/)
+    clearAgentSessionStamp(tid, 42, '100')
+    expect(harness.info).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('claude resumability gating', () => {

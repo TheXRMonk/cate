@@ -23,6 +23,7 @@
 // first turn event. See AgentDef.resumableFromSessionStart.
 // =============================================================================
 
+import log from '../logger'
 import { SHELL_AGENT_SESSION_UPDATE } from '../../shared/ipc-channels'
 import { normalizeAgentSourceStartedAt, type AgentHookEvent } from '../../shared/agentHooks'
 import { AGENTS } from '../../shared/agents'
@@ -35,6 +36,7 @@ interface StampState {
   /** Dedup key of the last SHELL_AGENT_SESSION_UPDATE sent, so an unchanged
    *  stamp doesn't re-emit (and re-touch renderer panel state). */
   key?: string | null
+  diagnosticIdentity?: StampState['latest']
   latest?: Pick<TerminalAgentSession, 'agentId' | 'sessionId' | 'profile'> & {
     sourcePid?: number
     sourceStartedAt?: string
@@ -58,14 +60,30 @@ function stateFor(terminalId: string): StampState {
 }
 
 /** Send a stamp (or a clear) to the terminal's owner window, deduped. */
-function emit(terminalId: string, session: TerminalAgentSession | null): void {
+function emit(
+  terminalId: string,
+  session: TerminalAgentSession | null,
+  reason = 'hook',
+  trigger?: { sourcePid?: number; sourceStartedAt?: string },
+): void {
   const ownerWindowId = getTerminalOwner(terminalId)
   if (ownerWindowId == null) return
   const st = stateFor(terminalId)
   const key = session
     ? `${session.agentId}\0${session.sessionId}\0${session.cwd}\0${session.profile ?? ''}`
     : null
-  if (st.key === key) return
+  if (st.key === key) {
+    // Process generation is not part of the persisted stamp's dedup key.
+    if (session && st.latest) st.diagnosticIdentity = { ...st.latest }
+    return
+  }
+  const previous = st.diagnosticIdentity
+  const next = session ? st.latest : undefined
+  log.info('[session-resume] %s', JSON.stringify({
+    action: session ? 'stamp' : 'clear', reason, terminalId, ownerWindowId,
+    previous: previous ?? null, next: next ?? null, trigger,
+  }))
+  st.diagnosticIdentity = next ? { ...next } : undefined
   st.key = key
   sendToWindow(ownerWindowId, SHELL_AGENT_SESSION_UPDATE, terminalId, session)
 }
@@ -111,7 +129,7 @@ export function ingestAgentSessionStamp(runtime: Runtime, event: AgentHookEvent)
     )) return
     st.seq++
     st.latest = undefined
-    emit(terminalId, null)
+    emit(terminalId, null, 'session-end', { sourcePid: event.sourcePid, sourceStartedAt: event.sourceStartedAt })
     return
   }
   if (event.sessionId == null) return
@@ -132,7 +150,7 @@ export function ingestAgentSessionStamp(runtime: Runtime, event: AgentHookEvent)
     // Hermes's session reset): the old stamp is no longer what runs here.
     if (previous?.agentId === agentId && (
       previous.sessionId !== sessionId || previous.profile !== event.profile
-    )) emit(terminalId, null)
+    )) emit(terminalId, null, 'non-resumable-replacement', { sourcePid: event.sourcePid, sourceStartedAt: event.sourceStartedAt })
     return
   }
   st.latest = identity
@@ -166,10 +184,15 @@ export function clearAgentSessionStamp(
   ) return
   st.seq++
   st.latest = undefined
-  emit(terminalId, null)
+  emit(terminalId, null, 'process-exit', { sourcePid: endedAgentPid, sourceStartedAt: endedAgentStartedAt })
 }
 
 /** The terminal itself is gone — drop its stamp state. */
 export function dropAgentSessionStampState(terminalId: string): void {
+  const st = states.get(terminalId)
+  if (st) log.info('[session-resume] %s', JSON.stringify({
+    action: 'drop', reason: 'terminal-teardown', terminalId,
+    previous: st.diagnosticIdentity ?? null,
+  }))
   states.delete(terminalId)
 }
